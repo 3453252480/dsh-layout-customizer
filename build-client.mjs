@@ -79,6 +79,8 @@ ${chunks.join('\n\n')}
 			settingsNavList: lcSettingsNavList,
 			settingsTabsFromNavList: lcSettingsTabsFromNavList,
 			settingsNavByTag: lcSettingsNavByTag,
+			settingsOverlayRoot: lcSettingsOverlayRoot,
+			sidebarScope: lcSidebarScope,
 			clickableSet: lcClickableSet,
 			findSettingsMenuItem: lcFindSettingsMenuItem,
 			settingsTriggerButton: lcSettingsTriggerButton,

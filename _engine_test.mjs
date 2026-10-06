@@ -1753,6 +1753,74 @@ if (problems.length) {
   for (const p of problems) console.log('  - ' + p)
   process.exit(1)
 }
+/* ── 测试 39（v0.1.13 核心回归）：真机场景完全复现 ──
+   真机诊断坐实的三件事：
+     · 设置面板**没有** data-shortcut-modal，也**没有** <nav>；
+     · 「蔬东坡工作台」插件把 `– / 账号 / 仓库 / 上传 / 仓库信息 / 去上传 → / 关闭`
+       注册进了**侧栏插件区**（`_2H3hWW_panelList`）；
+     · 设置面板的内容区里另有一堆按钮（我们自己的面板就渲染在那里）。
+   旧判据扫到侧栏就把那排按钮当成了「设置左侧导航」→ 用户看到 8 个错项；
+   那个插件界面有时没渲染 → 同一份代码又对了（用户说的「时好时坏」）。
+   这里断言：无论侧栏与内容区里有多少按钮，都必须选中左栏导航。 */
+{
+  const side = buildSidebar(false)
+
+  /* ① 「蔬东坡工作台」注册进侧栏插件区的那排按钮 */
+  const sdp = document.createElement('div')
+  sdp.className = 'ghu-slot-host'
+  for (const t of ['–', '账号', '仓库', '上传', '仓库信息', '去上传 →', '关闭']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    sdp.appendChild(b)
+  }
+  side.panelList.appendChild(sdp)
+
+  /* ② 设置面板：无 data-shortcut-modal、无 <nav>，只有 fixed 浮层根 */
+  const overlay = document.createElement('div')
+  overlay.className = 'settingsOverlay'
+  overlay.setAttribute('data-lc-test-fixed', '1') /* 模拟 position:fixed */
+
+  const navBox = document.createElement('div')
+  const labels = ['账号与余额', '通用设置', '模型', '插件市场']
+  for (const t of labels) {
+    const b = document.createElement('button')
+    b.textContent = t
+    navBox.appendChild(b)
+  }
+
+  /* ③ 内容区：故意放**更多**按钮（6 个 > 导航 4 个）—— 只靠「项数多」打分必然选错 */
+  const content = document.createElement('div')
+  const cfg = document.createElement('div')
+  for (const t of ['上传', '解除绑定', '仓库', '账号', '仓库信息', '关闭']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    cfg.appendChild(b)
+  }
+  const wrap = document.createElement('div')
+  wrap.className = 'lc_wrap'
+  content.appendChild(cfg)
+  content.appendChild(wrap)
+
+  overlay.appendChild(navBox)
+  overlay.appendChild(content)
+  document.body.appendChild(overlay)
+
+  const tabs = L.discoverSettingsTabs()
+  check(
+    tabs.map((t) => t.label).join('|') === labels.join('|'),
+    `真机场景下设置导航取错（期望 ${labels.join('/')}，实际 ${tabs
+      .map((t) => t.label)
+      .join('/')}）`,
+  )
+  check(
+    !tabs.some((t) => t.label === '去上传 →' || t.label === '–'),
+    '把侧栏插件区里别的插件的按钮当成了设置导航项',
+  )
+  check(L.looksLikeNavItem(sdp.firstElementChild) === false, '侧栏里的按钮仍被算作「像导航项」')
+
+  overlay.remove()
+}
+
 console.log('全部通过 ✓')
 console.log('  · 排序只动同层节点，不给父容器加行内样式')
 console.log('  · 折叠态不隐藏会位移到标题栏的元素')
@@ -1791,5 +1859,7 @@ console.log('  · 打开设置走直连设置按钮，不弹菜单、不留抑�
 console.log('  · 菜单抑制用 display:none（不会留下隐形占位）')
 console.log('  · 设置座位里的空壳按钮被清掉，有内容的不动、恢复内容能还原')
 console.log('  · 点头像不再拦宿主，而是自动点掉菜单里的「设置」（含非 role=menu 的内联菜单）')
+console.log('  · 设置导航用 <nav> 判据定位，干扰按钮与类名变化都不影响')
+console.log('  · 真机场景：侧栏插件区的按钮与内容区的长列表都不会被当成设置导航')
 console.log('  · 设置导航用 <nav> 判据定位，干扰按钮与类名变化都不影响')
 console.log('  · flags（行为开关）被共享状态保留')
