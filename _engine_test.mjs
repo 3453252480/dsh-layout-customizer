@@ -13,11 +13,15 @@
  *   5. 父子项隐藏互不干扰
  */
 
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 const JSDOM_PATH =
   'file:///C:/Users/syste/.dsh/dsh-browser/extensions/dsh-browser/node_modules/jsdom/lib/api.js'
 const { JSDOM } = await import(JSDOM_PATH)
 
-const FILE = 'C:/Users/syste/.dsh/plugins-src/dsh-layout-customizer/lib/client.js'
+/* 产物路径按脚本自身位置推导（旧版写死 .dsh\plugins-src，迁移后跑不了）。 */
+const FILE = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'client.js')
 const { readFileSync } = await import('node:fs')
 const code = readFileSync(FILE, 'utf8')
 

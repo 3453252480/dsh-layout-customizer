@@ -510,7 +510,8 @@ React.createElement(...)          // ← 用大写 → ReferenceError: React is 
 ### 验证必须用真实渲染
 
 `_e2e.mjs` 会模拟 `__ModuleLoader__` 加载产物，并**用 `react-dom/server`
-真正渲染组件**，断言渲染结果里出现 `lc_button` 和按钮文字。
+真正渲染组件**：先传**别人的** `subject`（断言渲染成空字符串——面板不该出现），
+再传**自己的** `subject`（断言出现 `lc_wrap` 和面板标题文字）。
 
 两个必须遵守的细节：
 
@@ -524,10 +525,16 @@ React.createElement(...)          // ← 用大写 → ReferenceError: React is 
 
 ```
 lib/client/*.src.js     ← 源码片段，禁止出现 import/export（构建脚本会检查）
-build-client.mjs        ← 把片段按顺序拼成单文件
+build-client.mjs        ← 把片段按顺序拼成单文件（项目根按脚本位置推导）
 lib/client.js           ← 构建产物（__ModuleLoader__ 格式），真正被加载的就是它
-_e2e.mjs                ← 端到端验证（模拟加载 + 真实 SSR 渲染）
+_e2e.mjs                ← 端到端验证（模拟加载 + 真实 SSR 渲染，含归属判断正反例）
+_subject_test.mjs       ← slot 归属判断回归测试（16 断言，纯 Node）
+_engine_test.mjs        ← 引擎行为测试（jsdom 真实 DOM）
 ```
+
+三个测试都能独立跑：`node _subject_test.mjs`、`node _e2e.mjs`、`node _engine_test.mjs`
+（退出码 0 = 全绿）。改 `panel.src.js` / `entry.src.js` 后**先 `node build-client.mjs`**
+再跑测试——测的都是产物 `lib/client.js`，不是片段。
 
 片段之间共享同一个函数作用域，所以互相直接调用即可，无需 import。
 所有符号都加了 `lc` 前缀或用 `LC_` 前缀的常量，避免和宿主作用域撞名。

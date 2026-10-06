@@ -16,6 +16,8 @@
  */
 
 import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /* react / react-dom 从本机已有安装位置取（profile 里没有）。 */
 const NM = 'file:///C:/Users/syste/.dsh/dsh-browser/extensions/dsh-browser/node_modules'
@@ -24,7 +26,8 @@ const ReactImpl = ReactModule.default ?? ReactModule
 const ServerModule = await import(NM + '/react-dom/server.js')
 const ReactDOMServer = ServerModule.default ?? ServerModule
 
-const FILE = 'C:/Users/syste/.dsh/plugins-src/dsh-layout-customizer/lib/client.js'
+/* 产物路径按脚本自身位置推导（旧版写死 .dsh\plugins-src，迁移后跑不了）。 */
+const FILE = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'client.js')
 const code = readFileSync(FILE, 'utf8')
 
 /* ── 1) 捕获 __ModuleLoader__.load ── */
@@ -142,21 +145,36 @@ if (mod) {
 
     /* 关键一步：用 react-dom/server 真正渲染组件。
        必须真实渲染，才能抓到 React 名字不匹配、hooks 用法错误这类问题。
-       直接调用组件函数是无效的（hooks 在 React 环境外无法工作）。 */
-    try {
-      const html = ReactDOMServer.renderToStaticMarkup(
-        ReactImpl.createElement(registered.component, { wide: true }),
+       直接调用组件函数是无效的（hooks 在 React 环境外无法工作）。
+
+       注意：plugins.detail.section 是宿主对**每个**插件详情页都渲染的 slot，
+       条目必须看 subject 判断归属（对自己无话可说的返回 null）。
+       所以这里两种 subject 都要测：别人的页面必须渲染成空。 */
+    const renderWith = (subject) =>
+      ReactDOMServer.renderToStaticMarkup(
+        ReactImpl.createElement(registered.component, { subject }),
       )
-      if (!html || typeof html !== 'string') {
-        problems.push('SSR 渲染没产出 HTML')
+    try {
+      /* ① 别人的详情页：必须渲染成空字符串（= 返回 null），
+            否则面板会挂在每个插件页最下面（v0.1.1 的 bug）。 */
+      const otherHtml = renderWith({
+        kind: 'bundle',
+        pkg: { name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: '0.2.0-rc.2' },
+      })
+      if (otherHtml !== '') {
+        problems.push('别人的详情页也渲染了内容（应当返回 null）: ' + otherHtml.slice(0, 120))
+      }
+
+      /* ② 本插件自己的详情页：必须渲染出面板本体。 */
+      const html = renderWith({ kind: 'bundle', pkg: { name: 'dsh-layout-customizer' } })
+      if (!html || typeof html !== 'string' || html === '') {
+        problems.push('SSR 渲染没产出 HTML（本插件自己的详情页）')
       } else if (!html.includes('lc_wrap')) {
-        /* 按钮容器应该有 lc_button 类；没有说明渲染树不对。 */
+        /* 面板容器应该有 lc_wrap 类；没有说明渲染树不对。 */
         problems.push('渲染结果里没有找到面板（lc_wrap）。HTML 片段: ' + html.slice(0, 200))
-      } else {
-        /* 确认按钮文字渲染出来了。 */
-        if (!html.includes('界面布局')) {
-          problems.push('渲染结果里没有面板标题文字')
-        }
+      } else if (!html.includes('界面布局')) {
+        /* 确认面板标题文字渲染出来了。 */
+        problems.push('渲染结果里没有面板标题文字')
       }
     } catch (error) {
       problems.push('渲染组件抛错（这正是按钮不显示的典型原因）: ' + error.message)
