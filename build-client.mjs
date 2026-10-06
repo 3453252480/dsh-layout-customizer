@@ -78,6 +78,7 @@ ${chunks.join('\n\n')}
 			settingsPanelRoot: lcSettingsPanelRoot,
 			settingsNavList: lcSettingsNavList,
 			settingsTabsFromNavList: lcSettingsTabsFromNavList,
+			settingsSlotSnapshot: lcSettingsSlotSnapshot,
 			openSettingsViaTrigger: lcOpenSettingsViaTrigger,
 			accountMenuFallback: ACCOUNT_MENU_FALLBACK,
 			settingsTargets: SETTINGS_TARGETS,
