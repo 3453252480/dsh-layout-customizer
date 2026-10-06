@@ -43,11 +43,16 @@ try {
   await page.keyboard.press('ArrowUp')
   assert.ok((await sizes()).nav<before.nav,'导航重建后手柄仍绑定旧节点')
   /*
-   * 双击语义（v0.1.20 起）：
-   *   默认 → 插件区展开到最大（工作区保留最小高度），并记住比例；
-   *   Alt+双击 → 恢复自动分配（清掉比例）；
-   *   设置里打开「双击分隔线只显示两个插件」→ 双击收起到实测的两行高度。
+   * 双击语义（v0.1.21 起）：按**当前状态**切两端——
+   *   没展开到最大（自动分配 / 中间高度 / 两个插件态）→ 展开到最大（工作区保留最小高度）；
+   *   已展开到最大 → 收起为只显示两个插件（按实测两行高度）；
+   *   Alt+双击 → 恢复自动分配（清掉比例）。
    */
+  assert.ok(
+    ((await page.locator('.lc_sidebarSplit').getAttribute('title')) || '').includes('已展开时收起为两个插件'),
+    '分隔线提示没有说明双击语义',
+  )
+
   await page.locator('.lc_sidebarSplit').dblclick()
   const maxed = await sizes()
   assert.ok(maxed.nav > before.nav, '双击没有把插件区展开到最大')
@@ -57,19 +62,7 @@ try {
   await load()
   assert.ok(Math.abs((await sizes()).nav - maxed.nav) <= 4, '双击展开最大后刷新没有恢复高度')
 
-  await page.locator('.lc_sidebarSplit').dblclick({ modifiers: ['Alt'] })
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem('dsh-layout-customizer:sidebar-split')),
-    null,
-    'Alt+双击没有恢复自动分配',
-  )
-
-  await page.evaluate(() => window.L.setConfig({ flags: { 'sidebar.splitDblclickMin': true } }))
-  await page.evaluate(() => window.L.refreshPluginPages())
-  assert.ok(
-    ((await page.locator('.lc_sidebarSplit').getAttribute('title')) || '').includes('两个插件'),
-    '打开开关后分隔线提示没有跟着变',
-  )
+  // 已在最大 → 再双击才收起为两个插件。
   await page.locator('.lc_sidebarSplit').dblclick()
   const twoRows = await sizes()
   const measured = await page.evaluate(() => {
@@ -87,6 +80,29 @@ try {
   )
   assert.ok(measured.thirdTop === null || measured.thirdTop >= -2, '收起后第三个插件还露在可视区里')
   assert.ok(twoRows.region > 100, '收起为两个插件后工作区没有拿到空间')
+
+  // 两个插件态双击 → 立刻回到最大（不是「再收一次」）。
+  await page.locator('.lc_sidebarSplit').dblclick()
+  const remaxed = await sizes()
+  assert.ok(Math.abs(remaxed.nav - maxed.nav) <= 4, '收起为两个插件后再双击没有回到最大')
+
+  // 拖到中间高度后双击也必须是「展开到最大」（判定看状态，不是简单取反）。
+  const box2 = await page.locator('.lc_sidebarSplit').boundingBox()
+  await page.mouse.move(box2.x + box2.width / 2, box2.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(box2.x + box2.width / 2, box2.y - 60, { steps: 6 })
+  await page.mouse.up()
+  const middle = await sizes()
+  assert.ok(middle.nav < remaxed.nav - 4, '拖动没有把插件区拉离最大状态')
+  await page.locator('.lc_sidebarSplit').dblclick()
+  assert.ok(Math.abs((await sizes()).nav - maxed.nav) <= 4, '中间高度双击没有展开到最大')
+
+  await page.locator('.lc_sidebarSplit').dblclick({ modifiers: ['Alt'] })
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('dsh-layout-customizer:sidebar-split')),
+    null,
+    'Alt+双击没有恢复自动分配',
+  )
 
   await page.setViewportSize({ width: 1200, height: 450 })
   await page.locator('.lc_sidebarSplit').focus()
