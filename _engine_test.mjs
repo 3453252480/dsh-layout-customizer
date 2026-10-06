@@ -1844,6 +1844,42 @@ console.log('')
   check(L.discoverTabProxies().length === 0, '移回设置后插件区入口没有清理')
 }
 
+/* 回归：开启头像直达设置时，官方权限、语言、模型菜单仍保留全部选项。 */
+{
+  buildSidebar(false)
+  const menus = []
+  for (const labels of [
+    ['设置', '意见反馈', '退出登录'],
+    ['完全权限', '标准权限'],
+    ['中文', 'English'],
+    ['cbai/deepseek-v4.1-flash', '另一个模型'],
+    ['设置', '其他操作'],
+  ]) {
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('data-lc-test-fixed', '1')
+    for (const label of labels) {
+      const item = document.createElement('button')
+      item.setAttribute('role', 'menuitem')
+      item.textContent = label
+      menu.appendChild(item)
+    }
+    document.body.appendChild(menu)
+    menus.push(menu)
+  }
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {},
+    flags: { 'accountMenu.directSettings': true } })
+  check(L.discoverAccountMenuItems().length === 3, '官方下拉选项混入账号菜单发现结果')
+  check(Array.from(menus[0].children).every((el) => el.getAttribute('data-lc-hidden') === '1'),
+    '头像直达设置未隐藏账号菜单项')
+  for (const menu of menus.slice(1)) {
+    check(Array.from(menu.children).every((el) => !el.hasAttribute('data-lc-hidden')),
+      '开启头像直达设置误隐藏官方菜单：' + menu.textContent)
+  }
+  for (const menu of menus) menu.remove()
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {}, flags: {} })
+}
+
 if (problems.length) {
   console.log('发现问题 ✗')
   for (const p of problems) console.log('  - ' + p)
