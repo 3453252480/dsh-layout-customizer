@@ -1208,6 +1208,58 @@ v0.1.12 加的 `settings-discovery-fallback` 一上报就破案了：
 （每个页面会话一次），payload 增加 `overlayFound` / `sidebarScopeFound` ——
 这样即使修好了，也能从诊断里看出它走的是哪条判据。
 
+---
+
+## v0.1.14：设置导航收紧为「标签白名单」，设置 tab 可搬到插件区
+
+v0.1.13 用「侧栏作用域 / 内容区 / fixed 浮层」三条过滤排掉了干扰，但判据本身仍只要求
+「成组的短文本可点击项 ≥2」。只要形状对得上（例如插件详情页里那排
+`– / 账号 / 仓库 / 上传 / 仓库信息 / 解除绑定 / 下一步：选仓库 / 关闭`），
+就仍然有被认成「设置左侧导航」的余地。
+
+### 1. 从「形状像」收紧为「标签命中」
+
+`catalog.src.js` 固化当前宿主的 11 个设置标签（账号与余额 / 通用设置 / 模型 /
+内置插件 / Agent 预设 / IM 机器人 / iCloud 照片 / 微信连接 / 追问 / 网页搜索 /
+插件市场），并兼容旧版宿主的「通用」「插件」两个叫法，新增 `lcHasSettingsLabels()`：
+
+> **组内至少命中 2 个已知标签**，才认作设置导航。
+
+三处判据同时加上这道校验：`lcSettingsNavList()`（`_navList` 锚点）、
+`lcSettingsNavByTag()`（`<nav>` 锚点）、`lcNavInShell()`（浮层内聚类）。
+阈值取 2 而不是 1：单一标签（如「账号」）在仓库操作那排按钮里也出现过，
+只认 1 个等于没加。
+
+### 2. 设置是独立 portal 时也能定位
+
+`lcShellCandidates()` 新增一条：按「账号与余额 / 通用设置」标签反查可点击项，
+把它往上 5 层祖先收为候选外壳 —— 设置弹窗不挂在插件详情页的祖先链上时也能找到。
+
+### 3. 设置弹窗没打开也能配置
+
+- `settings.nav` 发现为空时，面板改用 `SETTINGS_TAB_FALLBACK` 渲染，
+  于是「设置关着也能调 tab 顺序 / 隐藏」；
+- `lcOpenSettingsTab()` 去掉「面板已开才切 tab」的前置判断，改为直接 `pickTab()`。
+
+### 4. 设置 tab 可以搬到侧栏
+
+- 新增 `.lc_moveBtn.lc_tabMove`（`width:auto` / `height:26px` / `padding:0 8px`），
+  设置 tab 的移动按钮不再被挤成 20×20 的小方块；
+- 设置 tab 的**代理按钮**并入 `sidebar.panels` / `sidebar.footerActions` 的细项列表，
+  搬过去就是一个可点击的入口（点击 → 切到对应的设置 tab）；
+- 清理代理时比对容器（`wanted[proxy.label] === proxy.container`）：
+  在「插件区 ↔ 底部插件区」之间切换不会留下两个入口，搬回设置面板也不会误删。
+
+### 新增回归测试
+
+| 场景 | 断言 |
+| --- | --- |
+| 插件详情页只有仓库操作（8 个按钮，形状与未登录设置导航一致） | `discoverSettingsTabs()` 返回 0 项 |
+| 独立设置 portal（不在插件页祖先链上） | 11 个标签全部认出，且导航容器定位正确 |
+| 切换目标容器（panelList ↔ footerActions） | `discoverTabProxies()` 只留一个入口，`container` 正确 |
+| 「底部整块 → 底部插件区 → 动态按钮」实际路径 | 仍能继续展开并按 order 排序 |
+| 设置弹窗未打开 | 默认 tab 仍能建立持久的插件区入口 |
+
 
 
 

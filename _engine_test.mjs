@@ -890,6 +890,15 @@ function buildSettingsPanel() {
     '搬到侧栏的 tab 没有从设置导航里隐藏（会变成复制而不是移动）',
   )
 
+  // 切换目标区域不能留下两个入口。
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: { [tabId]: 'footerActions' } })
+  check(L.discoverTabProxies().length === 1 && L.discoverTabProxies()[0].container === 'footerActions', '切换区域后设置入口重复或位置错误')
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: { [tabId]: 'panelList' } })
+  let selected = 0
+  src.element.addEventListener('click', () => { selected += 1 })
+  d.panelList.querySelector('[data-lc-tab-proxy]').click()
+  check(selected === 1, '点击插件区入口没有切到对应设置 tab')
+
   /* 移回原位：入口要删掉，设置里的 tab 要恢复。 */
   L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
   check(!d.panelList.querySelector('[data-lc-tab-proxy]'), '移回后侧栏入口没有删除')
@@ -1003,6 +1012,21 @@ function buildSettingsPanel() {
   check(list.length === 1, `「底部插件区」没列出细项（期望 1，实际 ${list.length}）`)
   check(list[0] && list[0].id === 'sidebar.icon:模型用量', '细项 id 不对')
   check(list[0] && list[0].movable === true, '细项没被标记为可搬家')
+
+  // 按实际界面路径：底部整块 → 底部插件区 → 动态按钮。
+  const footArea = L.targets.find((t) => t.id === 'sidebar.footArea')
+  const nestedFooter = L.childrenOfItem(footArea, kids, {}).find((t) => t.id === footerActions.id)
+  const nestedKids = {
+    'sidebar.footerActions': [
+      { id: 'sidebar.icon:模型用量', label: '模型用量' },
+      { id: 'sidebar.icon:抖音', label: '抖音' },
+      { id: 'sidebar.icon:微信连接', label: '微信连接' },
+    ],
+  }
+  const nestedList = L.childrenOfItem(nestedFooter, nestedKids, {
+    'sidebar.icon:微信连接': 1, 'sidebar.icon:抖音': 2, 'sidebar.icon:模型用量': 3,
+  })
+  check(nestedList.map((t) => t.label).join('/') === '微信连接/抖音/模型用量', '底部整块内的底部插件区不能继续展开或排序')
 
   /* 运行时还没有数据时不展开（别出现点不开的空箭头）。 */
   check(L.childrenOfItem(footerActions, {}, {}).length === 0, '没有细项数据时不该展开')
@@ -1748,6 +1772,39 @@ function buildSettingsPanel() {
 }
 
 console.log('')
+// 回归：插件详情页不在设置 portal 内，页面只有仓库操作时不能认作导航。
+{
+  document.body.innerHTML = '<div class="lc_wrap"></div>'
+  const unrelated = document.createElement('div')
+  unrelated.innerHTML = '<div><button>–</button><button>账号</button><button>仓库</button><button>上传</button><button>仓库信息</button><button>解除绑定</button><button>下一步：选仓库</button><button>关闭</button></div>'
+  document.body.appendChild(unrelated)
+  check(L.discoverSettingsTabs().length === 0, '仓库操作被误识别为设置导航')
+  check(L.discoverSettingsElements('settingsNav').length === 0, '错误按钮容器被当作设置导航')
+  const portal = document.createElement('div')
+  const labels = ['账号与余额', '通用设置', '模型', '内置插件', 'Agent 预设', 'IM 机器人', 'iCloud 照片', '微信连接', '追问', '网页搜索', '插件市场']
+  portal.innerHTML = '<div><div>' + labels.map((label) => '<button>' + label + '</button>').join('') + '</div><section>设置内容</section></div>'
+  document.body.appendChild(portal)
+  check(L.discoverSettingsTabs().map((t) => t.label).join('|') === labels.join('|'), '独立设置 portal 未找到图二的全部导航项')
+  check(L.discoverSettingsElements('settingsNav')[0] === portal.firstElementChild.firstElementChild, '独立 portal 导航容器定位错误')
+  portal.remove()
+  unrelated.remove()
+}
+
+// 设置弹窗未打开时，所有默认 tab 都可以建立持久的插件区入口。
+{
+  document.body.innerHTML = ''
+  const d = buildSidebar(false)
+  const labels = ['账号与余额', '通用设置', '模型', '内置插件', 'Agent 预设', 'IM 机器人', 'iCloud 照片', '微信连接', '追问', '网页搜索', '插件市场']
+  const moved = Object.fromEntries(labels.map((label) => ['settings.tab:' + label, 'panelList']))
+  L.applyConfig({ hidden: ['settings.tab:模型'], order: {}, labels: {}, moved })
+  check(L.discoverTabProxies().length === 11, '设置关闭时没有建立全部 11 个插件区入口')
+  check(d.panelList.querySelector('[data-lc-tab-proxy="模型"]').getAttribute('data-lc-hidden') === '1', '设置入口的单独隐藏未生效')
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved })
+  check(L.discoverTabProxies().length === 11, '重复应用导致设置入口重复')
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+  check(L.discoverTabProxies().length === 0, '移回设置后插件区入口没有清理')
+}
+
 if (problems.length) {
   console.log('发现问题 ✗')
   for (const p of problems) console.log('  - ' + p)

@@ -1,6 +1,6 @@
 {
   "name": "dsh-layout-customizer",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "界面布局自定义：隐藏或调整 DSH 左侧栏、设置面板与头像菜单里的各个控件，支持跨区搬家、页面拖动与点头像直接进设置",
   "type": "module",
   "main": "lib/index.js",
