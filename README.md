@@ -35,6 +35,22 @@
 | 设置内容区 | 右侧当前 tab 的内容 |
 | 设置页内的 tab | 通用 / 模型 / 插件…每个 tab 单独开关 |
 
+**头像菜单**
+
+| 控件 | 说明 |
+| --- | --- |
+| 设置 / 意见反馈 / 退出登录（未登录时是「登录」） | 点「头像」或侧栏底部「更多」弹出的那几项，可**单独隐藏**其中任意一项 |
+
+### v0.1.3 起新增的四件事
+
+1. **底部插件区的插件能像插件区一样单独隐藏**（模型用量 / 微信连接 / 抖音…）。
+2. **细项也能排序**，并且两个插件区之间可以互相搬家（面板里点 ↑ / ↓，
+   或在页面上直接拖）。
+3. **设置面板的每个 tab 可以搬到左侧栏**：拖到插件区（或点行内 ↑）后，
+   侧栏出现同名入口，点它直接打开设置并切到该 tab；原 tab 会从设置导航里
+   隐藏——这是「移动」而不是「复制」，点 ⟲ 可移回原位。
+4. **页面上拖动时跟随鼠标**：拖动中有一个浮标显示「拖动：X → 落点」，落点会高亮。
+
 ## 三种操作方式
 
 1. **开关**：面板里每行右侧的开关，控制显示 / 隐藏，改动即时生效并自动保存。
@@ -585,3 +601,451 @@ node $env:USERPROFILE\.dsh\patches\restore-desktop-profile.mjs --apply  # 恢复
 注意：恢复脚本会用快照里的 `llm-pi-ai` 配置覆盖当前的 provider 设置。
 如果之后重配过 API，恢复后要核对 `cordis.patch.yml` 的 `llm-pi-ai` 段
 和 `.credentials.yaml` 里的 key 名是否一致。
+
+---
+
+## v0.1.3 的改动要点（改这几块前务必读）
+
+### 1. 面板列子项：`childFrom` 必须排在 `parentId` 之前
+
+`lcChildrenOfItem`（`catalog.src.js`，纯函数、有单测）里分支顺序是修过的 bug：
+
+| 项 | parentId | childFrom | 早期结果 |
+| --- | --- | --- | --- |
+| 插件区 | 无 | `panelRows` | 正常展开 ✅ |
+| **底部插件区** | `sidebar.footArea` | `footerActions` | 先命中 parentId → `return []` → **永远没有细项** ❌ |
+
+症状：面板里「底部插件区」没有展开箭头，底部的插件（模型用量 / 微信连接…）
+**没法像插件区那样单独隐藏**（用户报的原始问题）。
+改法：`childFrom` 判定提到 `parentId` 之前；没有 `childFrom` 的（账号区）才不展开。
+
+### 2. 细项发现放宽 + 顺序反了的修法
+
+- `lcDiscoverContainerChildren` 的候选从 `button` 放宽到
+  `button,[role="button"],a[href]`，并**过滤嵌套候选**（按钮里的按钮只算外层）；
+  标签走 `lcElementLabel`（aria-label → title → 文字 → svg 标题），
+  收起态只渲染图标也不会漏。
+- `lcApplyMovableContainerOrder` 在「全部细项都有排序值（没有锚点）」时，
+  早期是每个都 `insertBefore(host.firstChild)` → 后来的盖住先前的 → **顺序正好反过来**。
+  现在改成「先判尾部顺序是否已正确，否则整体摘下来按序 append」，
+  并保持幂等（顺序对就一个节点都不动，否则会自触发闪烁）。
+
+### 3. 头像菜单：只读发现 + 防遮挡
+
+宿主 primitives 的 `Menu`（`side:"top"`, `portal`）定位是：
+
+```js
+top = side === 'top' ? anchorRect.top - gap - height : anchorRect.bottom + gap
+top = clamp(top, 上边距, innerHeight - height - margin)   // ← 没有 flip
+```
+
+所以触发器一旦靠近窗口顶部（用户可以把「底部整块」拖到侧栏最上面，
+头像就跟着上去了），算出来是负值被夹到最上沿 → **菜单压在头像身上、还盖住下方内容**。
+
+修法（`lcFixFloatingMenuPlacement`）：
+
+- 触发条件：**菜单压住触发器**（判据用宿主位置）或**顶到视口上沿**，且下方放得下；
+- 动作：加 **`margin-top` 位移**，**绝不改 `top`** ——
+  `top` 是宿主每次 `place()` 都会重写的 inline 值，改了它就再也分不清
+  「当前位置」和「宿主位置」；
+- 位移量记在 `data-lc-menu-shift` 上，重算时先减掉它还原宿主位置 → **幂等**；
+- 🔴 **判据必须基于宿主位置**（`hostTop = rect.top - shift`）。
+  用「当前位置」判断会来回振荡：位移一生效遮挡看起来就没了 → 撤掉位移 →
+  菜单弹回原位又压住头像 → 下一轮再位移……
+
+菜单条目按语义属性发现（`[role="menu"]` + `[role="menuitem"]`），
+标签取内部 `[class*="_itemLabel"]`，**不能取整个 textContent** ——
+否则快捷键徽标（`Ctrl+,`）会被算进 id，开关时而对不上。
+id 前缀 `account.menu:`，level 用独立的 `menuRoot`（它是 portal 浮层，
+不是侧栏 DOM，不参与侧栏排序）。
+
+### 4. 设置 tab 搬家：搬的是「入口」，不是 DOM 节点
+
+⚠️ 不能像图标那样把 tab 节点搬走：那些 tab 由设置面板的 React 树渲染，
+搬走后宿主下次 commit 就把它拉回去，而且**设置面板一关整个节点就消失**，
+侧栏上什么都不剩。
+
+做法（`lcEnsureTabProxies`）：
+
+- 配置照样记在 `moved`（`settings.tab:插件` → `panelList` / `footerActions`）；
+- 在目标容器里创建**我们自己的按钮**（`[data-lc-tab-proxy]`，React 不管它），
+  宿主要重渲染也只会被我们的观察器重建；
+- 点击入口 → `lcOpenSettingsTab` 走真实路径：点设置入口（可能是账号菜单，
+  再点菜单里的「设置」）→ 轮询找到目标 tab → 点它；
+  即使「设置」这一项被用户隐藏了也点得动（隐藏只是 `display:none`，DOM 还在）；
+- 原 tab 在设置导航里隐藏（`moved` 里有记录即视为隐藏）→ 语义是「移动」；
+- 入口节点必须参与 `lcCollapseEmptyContainers` 的子项统计，
+  否则容器会被判空收起、把入口一起弄没。
+
+### 5. `moved` 一度被丢弃
+
+`lcSetConfig` 早期只拷 `hidden / order / labels`，把 `moved` 丢了 →
+表现为「拖到另一个容器后过一会儿／刷新后又弹回原位」。
+`lcBlankConfig` / `lcSetConfig` / `lcFetchConfig` 三处都要带 `moved`。
+
+### 6. 页面拖动的浮标不能挡住命中判定
+
+`pickMode` 的拖动浮标（`.lc_dragGhost`）必须 `pointer-events:none`，
+否则松手时 `findTarget` 命中的是浮标自己，落点永远是空。
+
+### 新增回归测试（`_engine_test.mjs` 17–23）
+
+- 头像菜单项可单独隐藏，标签不含快捷键；
+- 菜单在顶部压住头像时翻到下方，且幂等、不碰宿主 `top`；
+- 设置 tab 可搬到左侧栏（原 tab 隐藏、移回即还原）；
+- 底部插件区的插件可单独隐藏；
+- 容器内细项排序不反向、且幂等；
+- `moved` 被共享状态保留；
+- 面板能给「底部插件区 / 头像菜单」列出细项（`lcChildrenOfItem` 的分支顺序）。
+
+### 同步脚本已改路径
+
+`~/.dsh/patches/sync-layout-customizer.mjs` 里的 `SRC` 曾指向**已废弃**的
+`~/.dsh/plugins-src/dsh-layout-customizer`（目录早就不存在了）。
+现已改为 `Documents\Fate\AI仓库\DSH\Plugin\dsh-layout-customizer`
+（插件源码统一根目录）。改完跑：
+
+```powershell
+node $env:USERPROFILE\.dsh\patches\sync-layout-customizer.mjs
+```
+
+它现在会把 `_engine_test.mjs` 也跑一遍（失败即拒绝同步）。
+
+---
+
+## v0.1.5 的改动要点
+
+### 1. 🔴 只复制到 node_modules 会被 pnpm 回滚（最重要的一条）
+
+**实测**：19:00 把新版文件复制进 `profiles\desktop\node_modules\dsh-layout-customizer`，
+**19:05 pnpm 按 `pnpm-lock.yaml` 重新安装，把它换回旧版本**（lockfile 里写的还是旧 tarball）。
+症状：用户「重启/刷新了还是没变化」，而源码与产物都是对的。
+
+**node_modules 是 pnpm 的产物目录，不是写入目标。** 要让改动生效必须让 lockfile 指向新包：
+
+```powershell
+node $env:USERPROFILE\.dsh\patches\sync-layout-customizer.mjs --pack --install
+# 或 plugin_manager install_bundle  target=<tarball 绝对路径>
+```
+
+装完**重启 DSH**（客户端 bundle 由 host 在启动时装配，刷新页面不够）。
+上面那个脚本现在也会打印这条警告，避免再踩。
+
+### 2. 设置面板只留「左侧导航」
+
+`SETTINGS_TARGETS` 里删掉了 `settings.header` / `settings.content`（用户要求
+「设置项只留一个左侧导航」）。它们的元素**仍然需要**：定位整个设置面板靠
+「关闭按钮 → 标题栏」这条链，删掉的话导航也找不到了。
+所以 `lcDiscoverSettingsElement('settingsHeader'|'settingsContent')` 保留，
+只是不再出现在面板里、也不再被隐藏。
+
+### 3. 「能拖」不等于「能生效」：两个排序必须真的执行
+
+面板里的拖拽只写 `config.order`，**必须有引擎侧的函数去应用它**。
+v0.1.3 之前有两条链路是断的：
+
+| 对象 | 问题 | 修法 |
+| --- | --- | --- |
+| 设置导航各 tab | order 存下来了，但没人执行（它不属于两个「可搬家容器」） | 新增 `lcApplySettingsTabOrder` |
+| 头像菜单各项 | 只实现了隐藏，没有排序 | 新增 `lcApplyAccountMenuOrder` |
+
+两者都用与侧栏排序相同的幂等策略：**位置已经对就不动节点**（否则会自触发闪烁），
+无锚点时按序 append（不能每个都插到最前，会反向）。
+
+### 4. 面板里的细项拖动有三个坑（都修了）
+
+| 场景 | v0.1.3 行为 | 修法 |
+| --- | --- | --- |
+| 细项 → **另一个容器的细项** | 掉到 `ALL_TARGETS` 查找后放弃 → 没反应 | `commitChildReorder` 里跨容器改为 `moveChildToContainer` |
+| 细项 → **「插件区」那一行**（大项行） | 同上，没反应 | `commitReorder` 里识别 `sidebar.panels` / `sidebar.footerActions` → 搬到对应容器 |
+| 细项 → **设置面板的某个 tab** | 没反应 | 视为「移回设置面板」（清掉 moved） |
+
+### 5. 头像菜单的静态兜底清单
+
+菜单是 portal 浮层，**不点开就完全不在 DOM 里**。只靠运行时发现的话，面板里
+「头像菜单」平时没有箭头、展开不出任何东西（用户报过）。
+`ACCOUNT_MENU_FALLBACK` 给出默认四项（设置 / 意见反馈 / 退出登录 / 登录），
+标签与宿主 zh 词典一致 → 静态 id 与运行时 id（`account.menu:` + 标签）能对上；
+发现到真实条目时以真实的为准。
+
+⚠️ 头像菜单项**不参与跨容器搬家**（`movable` 由 id 前缀判定：
+只允许 `sidebar.icon:` 与 `settings.tab:`），它是浮层内容，搬到侧栏没有意义。
+
+---
+
+## v0.1.7 的改动要点
+
+### 1. 🔴 「设置面板细项无法展开」的根因：关闭按钮取错了
+
+设置面板的定位锚点是**「关闭」按钮**（往上找标题栏 → 再找导航）。旧实现只取
+**文档里第一个** aria-label 含「关闭」的按钮：
+
+```js
+const closeBtn = lcQuery('button[aria-label]').find(...)   // ← 只取第一个
+```
+
+真机上别的面板（侧栏右侧栏、其它浮层）也可能有关闭按钮。一旦取错，
+后面「标题栏 → 兄弟节点 → 导航」整条链全废 → **导航发现不到** →
+面板里「设置左侧导航」没有箭头、展开不出任何 tab（用户报的 bug）。
+
+新实现（`lcCloseButtons` / `lcSettingsShellOf` / `lcNavInShell`）：
+
+- **多候选**：所有像「关闭」的按钮都当锚点，各自推出一个设置面板外壳；
+- **逐层扫描聚类**：在每个外壳里把「短文本可点击项」沿祖先链上移 0/1/2/3 层，
+  各自按父节点聚类，取最像导航的一组：
+  - 扁平结构（`nav > button`）→ depth=0 就聚齐；
+  - 包了一层（`nav > wrapper > button`）→ depth=1 聚齐。
+  不用猜宿主包了几层 —— 上一版用 `lcRowOf(shell, el)` 推断行根，在包层结构下
+  会一路算到 nav 自己，这正是「导航定位错误」的来源；
+- **排除自己**：`.lc_wrap`（我们面板）与 `[data-lc-tab-proxy]`（侧栏 tab 入口）
+  里的按钮一律不算导航项，否则「页面上拖动 / 恢复默认」会被当成设置 tab；
+- 打分：带 `role=tab` 的最优先，其次项数多的，最后取更靠左的组。
+
+### 2. 新增「点头像直接进设置」（存在 config.flags）
+
+面板「头像菜单」分组里多了一个虚线框开关：打开后**点击头像不再弹出二级菜单**，
+直接打开设置面板；组内三个细项同时全部显示为关闭（它们已无出场机会）。
+
+- 配置存在 `config.flags[LC_ACCOUNT_DIRECT_KEY]`（键名 `accountMenu.directSettings`），
+  **不是** hidden —— 它是行为开关，不改变用户原有的隐藏列表；
+- 拦截必须在 **capture 阶段** + `stopImmediatePropagation`：React 的事件委托挂在
+  根容器上，等冒泡阶段再拦已经晚了；
+- 宿主没有「打开设置」的对外 API，唯一入口是 `头像触发器 → 菜单 → 设置项`。
+  所以借道这条路，同时给 `<html>` 打 `data-lc-menu-suppress="1"`，样式表把
+  `[role="menu"]` 设成 `visibility:hidden` —— 视觉上不会闪出二级面板；
+- 程序化点触发器前要先放行一次（`lcAllowTriggerClick`），否则会被自己的拦截吃掉。
+
+### 3. `flags` 必须在**三处**都保留，否则开关会被洗掉
+
+| 位置 | 作用 |
+| --- | --- |
+| `lib/index.js` 的 `normalize` / `emptyConfig` | host 端读写（**最容易漏**：漏了就是「开关打开后又自己关回去」） |
+| `state.src.js` 的 `lcBlankConfig` / `lcSetConfig` | 内存共享状态（与 `moved` 同一个坑） |
+| `entry.src.js` 的 `lcFetchConfig`、面板的 fetch 与 `updateConfig` 的 draft | 载入与保存 |
+
+面板里改**任何**配置时 draft 都要带上 `flags`，否则一动别的设置开关就丢。
+
+### 4. 新增回归测试（27–29）
+
+- 导航发现扛得住**假锚点**（假关闭按钮放文档前面）与**包层结构**，
+  并断言不把自己面板的按钮当 tab；
+- 开关判定、「开启后菜单项全部关闭」、关闭后恢复；
+- `flags` 被共享状态保留；
+- **内容区的长列表不会盖过导航**（模拟真实 rect：导航在左上、列表在右下）。
+
+### 5. 调试这两个 bug 时踩到的两个细节（别再改回去）
+
+1. **候选组必须过滤掉单项组**（`rows.length >= 2` 才收）：
+   单项组的父容器 rect 往往是 0，会在打分里排到最前面，最后
+   `best.rows.length < 2` 直接返回 null —— 表现为「导航完全发现不到」。
+2. **`lcSettingsShellOf` 要在「标题栏的父是 body/html」时回退成 header**：
+   否则假锚点会把整个 `body` 当外壳，于是拿整页去搜导航
+   （侧栏图标、内容区按钮统统算进来）。
+
+---
+
+## v0.1.8 的改动要点
+
+### 1. 内置诊断上报（排查「某个控件发现不到」）
+
+设置面板的 DOM 由主应用内联渲染、类名不稳定，浏览器半只能按结构推。
+推不到时光看代码无法定位 —— 所以让**浏览器半把它实际看到的结构上报**，host 落盘：
+
+| 端点 | 作用 |
+| --- | --- |
+| `POST /api/layout-customizer/diag` | 追加一条诊断（保留最近 20 条） |
+| `GET /api/layout-customizer/diag` | 读回全部 |
+
+文件：`~/.dsh/storages/layout-customizer-diag.json`
+
+自动触发点（同一 tag 5 秒内只报一次）：
+
+- `settings-tabs-not-found`：设置面板开着但一个 tab 都没发现到 ——
+  快照包含 `roleTabs` / `tablists` 计数、每个关闭按钮推出的外壳的
+  **子元素清单（tag / class / 文本 / 子元素数 / 可点击数）**与导航推断结果；
+- `open-settings-no-trigger` / `open-settings-click-threw` / `open-settings-failed`：
+  「点头像直接进设置」借道流程的失败点（含当下的菜单与菜单项清单）。
+
+以后遇到「XX 控件发现不到」都能一次定位，不用再靠猜。
+
+### 2. 「点头像直接进设置」：拦截要分两个方向
+
+用户报「打开这个开关后点击头像没反应」。真实原因是他**在设置面板里打开开关、
+然后当场点头像测试** —— 那时面板已经开着，而旧实现在
+`lcOpenSettingsViaTrigger()` 开头就 `if (lcSettingsPanelOpen()) return`：
+拦截生效（菜单不弹）但什么都不做 → 看起来就是「点了没反应」。
+
+| 状态 | 行为 |
+| --- | --- |
+| 设置面板**没打开** | 拦截（`preventDefault` + `stopImmediatePropagation`），自己走借道流程打开设置 |
+| 设置面板**已打开** | **放行**（照常弹出菜单）—— 此时「进设置」没有意义，点了有反应更重要 |
+
+借道流程也加固了：trigger 找不到时回退用区域里第一个按钮；轮询放宽到 60×25ms；
+**失败时撤掉抑制、把菜单留在屏幕上**（让用户能自己点「设置」），而不是白点一下。
+
+### 3. 新增回归测试 30
+
+- 面板已打开时点头像：必须**放行**（`defaultPrevented === false`，且事件能被后续监听器收到）；
+- 面板未打开时点头像：必须**拦截**（`defaultPrevented === true`）。
+
+⚠️ 写这个测试时踩到一点：拦截逻辑读的是**共享状态** `lcGetConfig()`，
+所以测试里必须 `setConfig` + `applyConfig` 一起调（真实的 `updateConfig` 正是两者都调）。
+
+---
+
+## v0.1.9：诊断坐实的真根因
+
+### 🔴 「设置左侧导航展不开」= 锚点自食其果
+
+内置诊断（v0.1.8）第一次上报就给出了答案：
+
+```
+closeButtonCount: 1
+closeButtons[0].label  = "关闭 点头像直接进设置"   ← 这是我们自己的开关按钮！
+closeButtons[0].shell  = lc_body                    ← 推出的"外壳"是我们面板的容器
+nav: null
+```
+
+也就是说：**真机上设置面板的 ✕ 根本没有「关闭」这个 aria-label**，
+而旧实现定位整个设置面板的唯一锚点就是「aria-label 含『关闭』的按钮」——
+于是它抓到的唯一一个按钮是**我自己面板里的开关**（我的 aria-label 恰好写作
+「关闭 点头像直接进设置」，以「关闭」开头）。锚点错 → 外壳错 → 导航永远搜不到。
+
+两处修复：
+
+1. `lcCloseButtons()` 排除 `.lc_wrap` / `[data-lc-tab-proxy]` 里的按钮（不再自食其果）；
+2. 新增**不依赖任何类名与 aria-label** 的锚点 `lcShellCandidates()`：
+   - ① **我们自己的面板 `.lc_wrap` 的所有祖先**（最多 8 层）—— 本插件注册在
+     `plugins.detail.section`，面板**一定**渲染在设置面板内部，"从自己往上找"
+     是最可靠的锚点；
+   - ② 传统「关闭」锚点保留（已排除自身）。
+   然后对每个候选外壳跑导航聚类，取项数最多的那个。
+
+### 诊断能力增强
+
+`settings-tabs-not-found` 的快照现在还会带：
+
+- `ownChain`：我们面板的祖先链（tag / class / 子元素数 / 可点击数）；
+- `shellCandidates`：每个候选外壳的导航推断结果（项数与标签）；
+- `tablistsDetail`：页面里 tablist 的真实身份（class、父/祖父 class、tab 文本）；
+- `globalGroups`：全局「成组的短文本可点击项」（排除侧栏与我们面板）——
+  一眼看出设置面板里到底有没有可切换的页列表。
+
+触发条件也放宽了：只要页面上有 `.lc_wrap`、有 tablist、或设置面板判定为打开，
+就会报一次（同 tag 5 秒限流）。
+
+### 新增回归测试 31–32
+
+- 我们自己面板里的按钮（aria-label 以「关闭」开头）**不能**被当成设置面板锚点，
+  也不能被算成导航项；
+- 真机场景（✕ **没有** aria-label）下，靠 `.lc_wrap` 祖先链仍能找到设置导航与 3 个 tab。
+
+---
+
+## v0.1.10：两个 bug 的真根因（改了才发现前面几版都在猜）
+
+用户报的两个问题：
+
+> **bug2**：设置面板左侧导航，要改的是「点击头像弹出的设置窗口」里那些项，
+> 结果做成了某个插件的设置项（列出来的是 `–、账号、仓库、上传、仓库信息、
+> 解除绑定、下一步：选仓库、关闭`）。
+
+> **bug1**：打开「点击头像直接进设置」开关后，点头像没有进入设置，
+> 反而在侧栏「凭空多了两个空白长条」。
+
+根因都是同一个毛病：**不看宿主源码、靠结构猜**。这一版读了宿主产物
+（`@deepseek-ai/dsh-client-ui-settings-general` 与侧栏 CSS module），把结构钉死。
+
+### 1. 🔴 设置面板的真实结构（读自宿主产物，别再猜）
+
+```
+div.<hash>_overlay                     浮层根（position:fixed，portal 到 body）
+  div.<hash>_mask
+  div.<hash>_panel  role="dialog"  data-shortcut-modal="settings"
+    nav.<hash>_nav
+      div.<hash>_navTitle              ← slot settings.header
+      div.<hash>_navList               ← ★ 左侧导航容器
+        button.<hash>_navCell × N      ← ★ 每一个设置页（图三左栏那 11 项）
+          span.<hash>_navLabel         ← 该项文字
+    div.<hash>_content
+      div.<hash>_header                ← 关闭按钮那一行
+        div.<hash>_actions             ← settings.action（「打开配置文件」）
+        button.<hash>_close            ← ⚠️ **没有 aria-label**
+      div.<hash>_options               ← settings.section
+```
+
+两个决定性事实：
+
+| # | 事实 | 旧实现的后果 |
+| --- | --- | --- |
+| ① | 关闭按钮**没有** `aria-label`（宿主把「关闭」放进一个视觉隐藏的 span，走 `settings.close` slot） | 拿它当唯一锚点的 `lcSettingsPanelOpen()` **恒为 false**；诊断里 `closeButtonCount` 一直是 0 |
+| ② | 面板根带 `data-shortcut-modal="settings"` —— 宿主显式打的语义属性，不随 CSS 哈希变化 | 旧实现只能从 `.lc_wrap` 沿祖先链「找成组的短文本可点击项」，于是在设置面板里**抓到了别的插件页那排按钮** → bug2 |
+
+**修法**：新增精确锚点并让它**优先于**所有结构推断（旧路径保留为回退）。
+
+- `LC_SETTINGS_PANEL_SELECTOR = '[data-shortcut-modal="settings"]'`
+- `LC_SETTINGS_NAV_SELECTOR = '[class*="_navList"]'`
+- `LC_SETTINGS_NAV_ITEM_SELECTOR = '[class*="_navCell"]'`（文字取 `_navLabel`）
+- `lcSettingsPanelOpen()` 改判宿主标记（旧关闭按钮判据只作兜底）
+
+设置导航的顺序与隐藏因此**作用在正确的对象上**（bug2 解决）。
+回归测试 33 专门放了一组「干扰按钮」（就是真机诊断里那 8 个），断言发现结果
+只能是 `_navCell` 那几项。
+
+### 2. 🔴 「点头像直接进设置」不再借道头像菜单（bug1 的主因）
+
+旧实现：`点头像 → 拦掉 → 程序化点头像触发器 → 菜单弹出 → 点菜单里的「设置」`，
+期间给 `<html>` 打 `data-lc-menu-suppress`，样式表用
+**`visibility:hidden`** 把菜单藏起来。
+
+问题出在两层：
+
+1. **`visibility:hidden` 会占位**。visibility 只是看不见，元素仍然占据布局位置；
+   宿主若把菜单（或别的 `role="menu"` 浮层）内联渲染在侧栏里，抑制期间
+   就会留下一块「隐形但占位」的空块 —— 正是「凭空多了个东西」。
+   → 改成 **`display:none`**（不占位），并加 1.5 秒**保险撤销**，
+   无论走哪条分支（成功 / 失败 / 抛异常）最后一定撤掉标记。
+2. 整条借道路径本来就不必要。宿主侧栏底部有**自己的设置按钮**：
+   `div.<hash>_triggerRow > button.<hash>_trigger`。
+   → 现在**首选直连**：直接点它，一步开面板，**完全不经过菜单**，
+   因此没有中间浮层、也不需要任何抑制（`lcOpenSettingsViaAccountMenu()`
+   只作为找不到那个按钮时的回退）。
+
+### 3. 「设置座位」里渲染空了的按钮壳会被清掉（bug1 的另一半）
+
+`footArea > settingsArea` 里的按钮内容来自 `settings.trigger` /
+`settings.launcher` 两个 slot。内容没渲染出来时，就剩下**有尺寸、无文字、
+无图标**的空壳 —— 从视觉上就是「两条空白长条」。
+
+新增 `lcHideEmptySettingsSlots()`：**只**在设置座位（`_settingsArea` /
+`_triggerRow` 的父）范围内，把「既没有文字、也没有 svg/img」的按钮
+打上 `data-lc-hidden`（`display:none`）。
+
+- **不碰 `_footerActions`**（那里是各插件自己的按钮，可能只是暂时没渲染完）；
+- **幂等且可逆**：一旦按钮里出现内容，标记自动摘掉（回归测试 36 两个方向都测了）；
+- 有图标或有文字的「设置」按钮**不受影响**。
+
+### 4. 诊断降噪（这次排查自己踩的坑）
+
+`settings-tabs-not-found` 原来的触发条件是「页面里有 `.lc_wrap` **或** 有 tablist
+**或** 面板判定为打开」，而我们的面板每 1.5 秒刷新一次动态子项 —— 结果每 5 秒写
+一条，20 条的容量几分钟就刷满，**bug1 的 `open-settings-*` 现场全被挤掉**，
+排查时等于没有。
+
+现在：只在**设置面板确实开着**时报，限流 60 秒；快照里新增
+`panelFound` / `navListFound` / `preciseTabs` 三个字段，一眼就能看出
+「面板找没找到、导航有几项」。
+
+### 5. 新增回归测试 33–36
+
+| # | 断言 |
+| --- | --- |
+| 33 | 面板里混着别的插件那排按钮时，设置导航仍只取 `_navCell`（✕ 无 aria-label 也能判定面板已开） |
+| 34 | 打开设置走「直连设置按钮」：不弹菜单、不留 `data-lc-menu-suppress` |
+| 35 | 抑制样式必须是 `display:none`，**不得**再用 `visibility:hidden` |
+| 36 | 空壳按钮被清理、有内容的不动、恢复内容后能还原 |
+
+
+
+
+

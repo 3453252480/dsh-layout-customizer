@@ -160,7 +160,11 @@ function buildSidebar(collapsed) {
   return { root, logoRow, brand, toggle, newSession, panelList, regionArea, footArea, footerActions, settingsArea }
 }
 
-/** 搭设置面板（模拟主应用内联结构）。 */
+/** 搭设置面板（模拟主应用内联结构）。
+ *
+ *  ⚠️ 每个 tab 外面**包一层 wrapper**，与真机一致：设置面板由主应用内联渲染，
+ *  类名不稳定、层级也不保证扁平。排序时必须移动「整行」，
+ *  直接移动内部的 button 会把结构搬坏 —— 测试要守住这一点。 */
 function buildSettingsPanel() {
   const shell = document.createElement('div')
   shell.className = 'unknown_shell'
@@ -174,11 +178,16 @@ function buildSettingsPanel() {
   header.appendChild(close)
   const nav = document.createElement('div')
   nav.className = 'nav'
+  const tabWraps = []
   for (const t of ['通用设置', '模型']) {
+    const wrap = document.createElement('div')
+    wrap.className = 'tabWrap'
     const b = document.createElement('button')
     b.setAttribute('aria-label', t)
     b.textContent = t
-    nav.appendChild(b)
+    wrap.appendChild(b)
+    nav.appendChild(wrap)
+    tabWraps.push(wrap)
   }
   const content = document.createElement('div')
   content.className = 'content'
@@ -187,7 +196,7 @@ function buildSettingsPanel() {
   shell.appendChild(nav)
   shell.appendChild(content)
   document.body.appendChild(shell)
-  return { shell, header, nav, content }
+  return { shell, header, nav, content, tabWraps }
 }
 
 /* ── 前置自检：确认 jsdom 与本项目的选择器能配合 ── */
@@ -267,16 +276,31 @@ function buildSettingsPanel() {
 
   const header = L.discoverSettingsElements('settingsHeader')
   const nav = L.discoverSettingsElements('settingsNav')
-  const content = L.discoverSettingsElements('settingsContent')
 
   check(header.length === 1 && header[0] === p.header, '设置标题栏定位错误')
   check(nav.length === 1 && nav[0] === p.nav, '设置导航定位错误')
-  check(content.length === 1 && content[0] === p.content, '设置内容区定位错误')
+  /* 内容区已随「设置项只留左侧导航」一起移除，不再作为可配置目标被发现。 */
+  check(
+    L.discoverSettingsElements('settingsContent').length === 0,
+    '设置内容区不该再被发现（已移除）',
+  )
 
-  L.applyConfig({ hidden: ['settings.header', 'settings.nav'], order: {}, labels: {} })
-  check(p.header.getAttribute('data-lc-hidden') === '1', '设置标题栏没被隐藏')
+  L.applyConfig({ hidden: ['settings.nav'], order: {}, labels: {}, moved: {} })
   check(p.nav.getAttribute('data-lc-hidden') === '1', '设置导航没被隐藏')
+  /*
+   * v0.1.4：用户要求「设置面板的设置项只留一个左侧导航」，
+   * 所以标题栏 / 内容区从可配置项目里移除 —— 它们**不该再被隐藏**。
+   * （结构发现函数仍保留：定位整个设置面板要靠「关闭按钮 → 标题栏」这条链。）
+   */
+  check(
+    p.header.getAttribute('data-lc-hidden') === null,
+    '设置标题栏不该再被隐藏（已从可配置项里移除）',
+  )
   check(p.content.getAttribute('data-lc-hidden') === null, '设置内容区被误隐藏')
+  check(
+    L.settingsTargets.length === 1 && L.settingsTargets[0].id === 'settings.nav',
+    '设置面板的可配置项目应当只剩「左侧导航」一个',
+  )
 
   const tabs = L.discoverSettingsTabs()
   check(tabs.length === 2, `设置 tab 发现数量不对（期望 2，实际 ${tabs.length}）`)
@@ -733,6 +757,909 @@ function buildSettingsPanel() {
   check(/transform:translateY\(-50%\)/.test(css), 'footer 浮层缺少居中用的 transform')
 }
 
+/* ── 测试 17：头像菜单的三个控件可单独隐藏 ──
+   菜单是宿主 primitives 的 portal 浮层（role=menu / role=menuitem），
+   只在点开时存在，所以按语义属性发现；标签取内部 label 元素，
+   否则会把快捷键徽标（Ctrl+,）也算进 id，导致开关时而对不上。 */
+{
+  buildSidebar(false)
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('data-lc-test-fixed', '1')
+
+  const mk = (label, shortcut) => {
+    const b = document.createElement('button')
+    b.setAttribute('role', 'menuitem')
+    const icon = document.createElement('span')
+    const span = document.createElement('span')
+    span.className = 'yHnPSG_itemLabel'
+    span.textContent = label
+    b.appendChild(icon)
+    b.appendChild(span)
+    if (shortcut) {
+      const sc = document.createElement('span')
+      sc.textContent = shortcut
+      b.appendChild(sc)
+    }
+    menu.appendChild(b)
+    return b
+  }
+  const settingsItem = mk('设置', 'Ctrl+,')
+  const contact = mk('意见反馈')
+  const signout = mk('退出登录')
+  document.body.appendChild(menu)
+
+  const found = L.discoverAccountMenuItems()
+  check(found.length === 3, `头像菜单项发现数量不对（期望 3，实际 ${found.length}）`)
+  check(
+    found.some((i) => i.id === 'account.menu:设置'),
+    '带快捷键的菜单项 id 没去干净（不该把 Ctrl+, 算进标签）',
+  )
+  check(found.some((i) => i.id === 'account.menu:意见反馈'), '菜单项 id 不是按标签生成')
+
+  L.applyConfig({ hidden: ['account.menu:意见反馈'], order: {}, labels: {}, moved: {} })
+  check(contact.getAttribute('data-lc-hidden') === '1', '头像菜单项没被隐藏')
+  check(settingsItem.getAttribute('data-lc-hidden') === null, '其它菜单项被误隐藏（设置）')
+  check(signout.getAttribute('data-lc-hidden') === null, '其它菜单项被误隐藏（退出登录）')
+
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+  check(contact.getAttribute('data-lc-hidden') === null, '菜单项没恢复显示')
+
+  menu.remove()
+}
+
+/* ── 测试 18：菜单在顶部压住头像时自动翻到下方 ──
+   宿主 Menu 的定位是 `top = anchor.top - gap - height` 再 clamp，没有 flip。
+   触发器被拖到侧栏顶部时，菜单会被夹到视口最上沿、盖住头像。
+   我们不改宿主的 top（它每次 place() 都会重写），而是加 margin-top 位移，
+   并把位移量记在 data-lc-menu-shift 上，保证重复调用幂等。 */
+{
+  buildSidebar(false)
+  const trigger = document.createElement('button')
+  trigger.setAttribute('aria-haspopup', 'menu')
+  trigger.setAttribute('aria-expanded', 'true')
+  document.body.appendChild(trigger)
+
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('data-lc-test-fixed', '1')
+  document.body.appendChild(menu)
+
+  /* 触发器在视口顶部（60~96），宿主按 side:top 算出来是负值 → 被夹到 12。 */
+  trigger.getBoundingClientRect = () => ({
+    left: 10, right: 200, top: 60, bottom: 96, width: 190, height: 36,
+  })
+  menu.getBoundingClientRect = () => ({
+    left: 10, right: 160, top: 12, bottom: 132, width: 150, height: 120,
+  })
+
+  check(L.fixFloatingMenuPlacement() === 1, '菜单压住触发器时没有被修正')
+  check(
+    menu.getAttribute('data-lc-menu-shift') === '88',
+    `菜单位移量不对（期望 88 = 96+4-12，实际 ${menu.getAttribute('data-lc-menu-shift')}）`,
+  )
+  check(
+    menu.style.getPropertyValue('margin-top') === '88px',
+    '菜单没拿到 margin-top 位移',
+  )
+  /* 不能碰宿主的 top —— 那是它每次重算都会写的位置。 */
+  check(menu.style.getPropertyValue('top') === '', '不该改写宿主的 top')
+
+  /* 幂等：位移生效后再跑一次不该再动（判据用宿主位置，不用当前含位移的位置）。 */
+  menu.getBoundingClientRect = () => ({
+    left: 10, right: 160, top: 100, bottom: 220, width: 150, height: 120,
+  })
+  check(L.fixFloatingMenuPlacement() === 0, '重复修正不幂等（又往下推了一次）')
+
+  /* 触发器回到下方、菜单不再压住它 → 清掉位移，把控制权还给宿主。 */
+  trigger.getBoundingClientRect = () => ({
+    left: 10, right: 200, top: 600, bottom: 636, width: 190, height: 36,
+  })
+  menu.getBoundingClientRect = () => ({
+    left: 10, right: 160, top: 400, bottom: 520, width: 150, height: 120,
+  })
+  check(L.fixFloatingMenuPlacement() === 1, '不再遮挡时没有清掉位移')
+  check(menu.getAttribute('data-lc-menu-shift') === null, '位移标记没被清除')
+  check(menu.style.getPropertyValue('margin-top') === '', 'margin-top 位移没被移除')
+
+  menu.remove()
+  trigger.remove()
+}
+
+/* ── 测试 19：设置面板的每个 tab 可以搬到左侧栏 ──
+   搬的是「入口」而不是 DOM 节点：那些 tab 由设置面板的 React 树渲染，
+   挪走会被拉回去、面板一关还会整个消失。搬到侧栏后原 tab 隐藏（= 移动，不是复制）。 */
+{
+  const d = buildSidebar(false)
+  const p = buildSettingsPanel()
+  const tabId = 'settings.tab:通用设置'
+
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: { [tabId]: 'panelList' } })
+
+  const proxies = L.discoverTabProxies()
+  check(proxies.length === 1, `设置 tab 入口数量不对（期望 1，实际 ${proxies.length}）`)
+  check(proxies[0] && proxies[0].container === 'panelList', '入口没建在插件区')
+  const el = d.panelList.querySelector('[data-lc-tab-proxy]')
+  check(!!el, '插件区里没有出现 tab 入口')
+  check(!!el && el.textContent.includes('通用设置'), '入口文字不是 tab 名')
+
+  const src = L.discoverSettingsTabs().find((t) => t.id === tabId)
+  check(!!src, '设置 tab 没被发现')
+  check(
+    !!src && src.element.getAttribute('data-lc-hidden') === '1',
+    '搬到侧栏的 tab 没有从设置导航里隐藏（会变成复制而不是移动）',
+  )
+
+  /* 移回原位：入口要删掉，设置里的 tab 要恢复。 */
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+  check(!d.panelList.querySelector('[data-lc-tab-proxy]'), '移回后侧栏入口没有删除')
+  check(
+    !!src && src.element.getAttribute('data-lc-hidden') === null,
+    '移回后设置面板里的 tab 没恢复显示',
+  )
+
+  p.shell.remove()
+}
+
+/* ── 测试 20：底部插件区的插件也能像插件区一样单独隐藏 ──
+   早期面板里「底部插件区」拿不到细项（childrenOf 的 parentId 分支抢在 childFrom 前），
+   于是它在界面上没有展开箭头、里面的插件怎么也隐藏不了。 */
+{
+  const d = buildSidebar(false)
+  const kids = L.discoverContainerChildren()
+  check(
+    (kids.footerActions || []).some((k) => k.label === '模型用量'),
+    '底部插件区的细项没被发现（面板里就没法单独隐藏）',
+  )
+
+  const mu = d.footerActions.querySelector('button')
+  L.applyConfig({ hidden: ['sidebar.icon:模型用量'], order: {}, labels: {}, moved: {} })
+  check(mu.getAttribute('data-lc-hidden') === '1', '底部插件区的插件没被单独隐藏')
+
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+  check(mu.getAttribute('data-lc-hidden') === null, '底部插件区的插件没恢复显示')
+}
+
+/* ── 测试 21：容器里的细项可以调整顺序 ──
+   全部细项都有排序值（没有锚点）时，早期实现每个都 insertBefore(firstChild)，
+   后来的盖住先前的，顺序正好反过来。 */
+{
+  const d = buildSidebar(false)
+  const extra = document.createElement('button')
+  extra.setAttribute('aria-label', '微信连接')
+  extra.textContent = '微信连接'
+  d.footerActions.appendChild(extra)
+
+  const mu = d.footerActions.querySelector('button[aria-label="模型用量"]')
+  L.applyConfig({
+    hidden: [],
+    order: { 'sidebar.icon:微信连接': 1, 'sidebar.icon:模型用量': 2 },
+    labels: {},
+    moved: {},
+  })
+
+  const order = Array.prototype.slice.call(d.footerActions.querySelectorAll('button'))
+  check(order[0] === extra, `细项排序没生效或反了（第 1 个应是微信连接，实际 ${order[0] && order[0].textContent}）`)
+  check(order[1] === mu, `细项排序没生效或反了（第 2 个应是模型用量，实际 ${order[1] && order[1].textContent}）`)
+
+  /* 幂等：顺序已正确时不该再摘挂节点。 */
+  const before = order.slice()
+  L.applyConfig({
+    hidden: [],
+    order: { 'sidebar.icon:微信连接': 1, 'sidebar.icon:模型用量': 2 },
+    labels: {},
+    moved: {},
+  })
+  const after = Array.prototype.slice.call(d.footerActions.querySelectorAll('button'))
+  check(before.length === after.length && before.every((el, i) => el === after[i]), '细项排序不幂等')
+
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+}
+
+/* ── 测试 22：搬家记录（moved）必须能被共享状态保留 ──
+   早期 lcSetConfig 只拷 hidden / order / labels，moved 被丢掉 ——
+   表现是「拖到另一个容器后过一会儿 / 刷新后又弹回原位」。 */
+{
+  check(
+    Object.keys(L.blankConfig().moved || {}).length === 0,
+    '空配置里没有 moved 字段',
+  )
+  const next = L.setConfig({
+    hidden: [],
+    order: {},
+    labels: {},
+    moved: { 'sidebar.icon:模型用量': 'footerActions' },
+  })
+  check(
+    next.moved && next.moved['sidebar.icon:模型用量'] === 'footerActions',
+    'lcSetConfig 把 moved 丢了（搬家配置不会被持久化，图标会弹回原位）',
+  )
+  /* 行为开关（flags）同样不能被共享状态丢掉。 */
+  check(Object.keys(L.blankConfig().flags || {}).length === 0, '空配置里没有 flags 字段')
+  const withFlag = L.setConfig({
+    hidden: [],
+    order: {},
+    labels: {},
+    moved: {},
+    flags: { 'accountMenu.directSettings': true },
+  })
+  check(
+    withFlag.flags && withFlag.flags['accountMenu.directSettings'] === true,
+    'lcSetConfig 把 flags 丢了（开关会在下次改动时被洗掉）',
+  )
+
+  /* 复位，避免影响其它断言之外的后续逻辑。 */
+  L.setConfig(L.blankConfig())
+}
+
+/* ── 测试 23：面板能给「底部插件区」列出细项 ──
+   「底部插件区」同时带 parentId（界面缩进到「底部整块」下）与 childFrom
+   （细项来自运行时发现）。早期先判 parentId 就 return []，于是它永远没有
+   子项、面板里没有展开箭头 —— 底部的插件也就没法像插件区那样单独隐藏。 */
+{
+  const footerActions = L.targets.find((t) => t.id === 'sidebar.footerActions')
+  const kids = { 'sidebar.footerActions': [{ id: 'sidebar.icon:模型用量', label: '模型用量' }] }
+  const list = L.childrenOfItem(footerActions, kids, {})
+  check(list.length === 1, `「底部插件区」没列出细项（期望 1，实际 ${list.length}）`)
+  check(list[0] && list[0].id === 'sidebar.icon:模型用量', '细项 id 不对')
+  check(list[0] && list[0].movable === true, '细项没被标记为可搬家')
+
+  /* 运行时还没有数据时不展开（别出现点不开的空箭头）。 */
+  check(L.childrenOfItem(footerActions, {}, {}).length === 0, '没有细项数据时不该展开')
+
+  /* 头像菜单的细项同样要能列出来。 */
+  const menuTarget = L.targets.find((t) => t.id === 'sidebar.accountMenu')
+  const menuList = L.childrenOfItem(
+    menuTarget,
+    { 'sidebar.accountMenu': [{ id: 'account.menu:设置', label: '设置' }] },
+    {},
+  )
+  check(menuList.length === 1, '头像菜单的细项没列出来')
+
+  /* 带 parentId 但**没有** childFrom 的项（账号区）不该展开。 */
+  const settingsTarget = L.targets.find((t) => t.id === 'sidebar.settings')
+  check(L.childrenOfItem(settingsTarget, kids, {}).length === 0, '没有 childFrom 的项不该展开')
+}
+
+/* ── 测试 24：头像菜单自带静态兜底清单 ──
+   菜单是 portal 浮层，不点开就不在 DOM 里。只靠运行时发现的话，
+   面板里「头像菜单」平时没有箭头、展开不出东西。
+   静态清单的 id 必须与运行时发现的规则一致（'account.menu:' + 标签）。 */
+{
+  const fb = L.accountMenuFallback
+  check(Array.isArray(fb) && fb.length >= 3, '头像菜单缺少静态兜底清单')
+  const ids = fb.map((x) => x.id)
+  for (const label of ['设置', '意见反馈', '退出登录']) {
+    check(ids.includes('account.menu:' + label), `静态清单里缺少「${label}」（或 id 规则不一致）`)
+  }
+
+  const target = L.targets.find((t) => t.id === 'sidebar.accountMenu')
+  const list = L.childrenOfItem(target, { 'sidebar.accountMenu': fb }, {})
+  check(list.length === fb.length, `头像菜单细项在面板里列不出来（${list.length}/${fb.length}）`)
+  check(list.every((x) => x.movable !== true), '头像菜单项不该被标记为可跨容器搬家（它是浮层内容）')
+}
+
+/* ── 测试 25：头像菜单三项支持排序（真的重排菜单 DOM）── */
+{
+  buildSidebar(false)
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('data-lc-test-fixed', '1')
+  /* 真机层级：menu > viewport > itemWrap > button[role=menuitem]
+     （primitives 的 Menu 会对每项包一层 .itemWrap） */
+  const viewport = document.createElement('div')
+  viewport.className = 'yHnPSG_viewport'
+  viewport.setAttribute('role', 'presentation')
+  menu.appendChild(viewport)
+  const made = []
+  const mk = (label) => {
+    const wrap = document.createElement('div')
+    wrap.className = 'yHnPSG_itemWrap'
+    const b = document.createElement('button')
+    b.setAttribute('role', 'menuitem')
+    const s = document.createElement('span')
+    s.className = 'yHnPSG_itemLabel'
+    s.textContent = label
+    b.appendChild(s)
+    wrap.appendChild(b)
+    viewport.appendChild(wrap)
+    made.push({ wrap, b })
+    return b
+  }
+  mk('设置')
+  mk('意见反馈')
+  mk('退出登录')
+  document.body.appendChild(menu)
+
+  L.applyConfig({
+    hidden: [],
+    labels: {},
+    moved: {},
+    order: {
+      'account.menu:退出登录': 1,
+      'account.menu:意见反馈': 2,
+      'account.menu:设置': 3,
+    },
+  })
+  const got = Array.prototype.slice
+    .call(menu.querySelectorAll('[role="menuitem"]'))
+    .map((x) => x.textContent)
+  check(
+    got[0] === '退出登录' && got[1] === '意见反馈' && got[2] === '设置',
+    `头像菜单的顺序没生效（实际 ${got.join(' > ')}）`,
+  )
+  /* ⚠️ 关键：移动的必须是整行（itemWrap），不能把 menuitem 从包装里拽出来 ——
+     直接移动 menuitem 会把宿主的结构搬坏。 */
+  check(
+    made.every((m) => m.b.parentElement === m.wrap),
+    '排序把菜单项从 itemWrap 里搬出来了（宿主结构被破坏）',
+  )
+  check(
+    viewport.children.length === 3 &&
+      Array.prototype.every.call(viewport.children, (c) => c.className.indexOf('_itemWrap') >= 0),
+    '排序后 viewport 的直接子元素不再是三个 itemWrap',
+  )
+
+  /* 幂等：顺序已正确时不该再摘挂节点。 */
+  const before = Array.prototype.slice.call(viewport.children)
+  L.applyConfig({
+    hidden: [],
+    labels: {},
+    moved: {},
+    order: {
+      'account.menu:退出登录': 1,
+      'account.menu:意见反馈': 2,
+      'account.menu:设置': 3,
+    },
+  })
+  const after = Array.prototype.slice.call(viewport.children)
+  check(before.length === after.length && before.every((el, i) => el === after[i]), '头像菜单排序不幂等')
+
+  menu.remove()
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+}
+
+/* ── 测试 26：设置导航各 tab 的顺序被真正执行 ──
+   早期面板里能拖、order 也存了，但没有任何代码去应用它（设置导航不在
+   两个「可搬家容器」里）→ 顺序永远不变。 */
+{
+  buildSidebar(false)
+  const p = buildSettingsPanel()
+  check(L.discoverSettingsTabs().length === 2, '设置 tab 数量不对，无法测排序')
+
+  L.applyConfig({
+    hidden: [],
+    labels: {},
+    moved: {},
+    order: { 'settings.tab:模型': 1, 'settings.tab:通用设置': 2 },
+  })
+  const got = Array.prototype.slice
+    .call(p.nav.querySelectorAll('button'))
+    .map((b) => b.textContent)
+  check(
+    got[0] === '模型' && got[1] === '通用设置',
+    `设置 tab 的顺序没生效（实际 ${got.join(' > ')}）`,
+  )
+  /* 移动的是整行（wrapper），不能把 button 从包装层里拽出来。 */
+  check(
+    Array.prototype.slice
+      .call(p.nav.querySelectorAll('button'))
+      .every((b) => b.parentElement && b.parentElement.className.indexOf('tabWrap') >= 0),
+    '设置 tab 排序把 button 从包装层里搬出来了（结构被破坏）',
+  )
+  check(p.nav.children.length === 2, '排序后设置导航的直接子元素数量变了')
+
+  /* 幂等。 */
+  const before = Array.prototype.slice.call(p.nav.querySelectorAll('button'))
+  L.applyConfig({
+    hidden: [],
+    labels: {},
+    moved: {},
+    order: { 'settings.tab:模型': 1, 'settings.tab:通用设置': 2 },
+  })
+  const after = Array.prototype.slice.call(p.nav.querySelectorAll('button'))
+  check(before.length === after.length && before.every((el, i) => el === after[i]), '设置 tab 排序不幂等')
+
+  p.shell.remove()
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+}
+
+/* ── 测试 27：设置导航的发现要扛得住「假锚点」与扁平结构 ──
+   旧实现只取文档里第一个 aria-label 含「关闭」的按钮当锚点：真机上别的面板
+   （侧栏右侧栏等）也可能有关闭按钮，取错之后「标题栏 → 兄弟节点」整条链全废，
+   导航发现不到 → 面板里「设置左侧导航」没有箭头。
+   这里刻意把假锚点放在**文档前面**，并且让真导航是扁平结构。 */
+{
+  buildSidebar(false)
+
+  /* 假面板：有关闭按钮，但里面没有任何导航项。 */
+  const decoy = document.createElement('div')
+  const decoyClose = document.createElement('button')
+  decoyClose.setAttribute('aria-label', '关闭')
+  decoy.appendChild(decoyClose)
+  const decoyBody = document.createElement('div')
+  decoyBody.appendChild(document.createElement('div'))
+  decoy.appendChild(decoyBody)
+  document.body.appendChild(decoy)
+
+  /* 真的设置面板：导航是扁平的（button 直接是 nav 的子）。 */
+  const shell = document.createElement('div')
+  const header = document.createElement('div')
+  const ttl = document.createElement('span')
+  ttl.textContent = '设置'
+  const close = document.createElement('button')
+  close.setAttribute('aria-label', '关闭')
+  header.appendChild(ttl)
+  header.appendChild(close)
+  const nav = document.createElement('nav')
+  for (const t of ['通用', '模型', '插件']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    nav.appendChild(b)
+  }
+  const content = document.createElement('div')
+  content.appendChild(document.createElement('div'))
+  /* 内容区里放一个「我们自己的面板」，它的按钮不能被当成导航项。 */
+  const ourPanel = document.createElement('div')
+  ourPanel.className = 'lc_wrap'
+  for (const t of ['页面上拖动', '恢复默认']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    ourPanel.appendChild(b)
+  }
+  content.appendChild(ourPanel)
+  shell.appendChild(header)
+  shell.appendChild(nav)
+  shell.appendChild(content)
+  document.body.appendChild(shell)
+
+  const found = L.discoverSettingsElements('settingsNav')
+  check(
+    found.length === 1 && found[0] === nav,
+    '存在多个关闭按钮时导航定位失败（旧实现会取错锚点，导致细项展不开）',
+  )
+  const tabs = L.discoverSettingsTabs()
+  check(tabs.length === 3, `扁平结构下 tab 数量不对（期望 3，实际 ${tabs.length}）`)
+  check(
+    tabs.every((t) => !/拖动|恢复默认/.test(t.label)),
+    '把我们自己面板里的按钮当成设置 tab 了',
+  )
+
+  shell.remove()
+  decoy.remove()
+}
+
+/* ── 测试 28：「点头像直接进设置」开关 ── */
+{
+  check(L.accountDirectKey === 'accountMenu.directSettings', '开关的配置键名不对')
+  check(L.accountMenuDirect({ flags: {} }) === false, '默认应当是关闭')
+  check(
+    L.accountMenuDirect({ flags: { 'accountMenu.directSettings': true } }) === true,
+    '开启状态判定失败',
+  )
+
+  buildSidebar(false)
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('data-lc-test-fixed', '1')
+  const items = []
+  const mk = (label) => {
+    const wrap = document.createElement('div')
+    wrap.className = 'yHnPSG_itemWrap'
+    const b = document.createElement('button')
+    b.setAttribute('role', 'menuitem')
+    const s = document.createElement('span')
+    s.className = 'yHnPSG_itemLabel'
+    s.textContent = label
+    b.appendChild(s)
+    wrap.appendChild(b)
+    menu.appendChild(wrap)
+    items.push(b)
+  }
+  mk('设置')
+  mk('意见反馈')
+  mk('退出登录')
+  document.body.appendChild(menu)
+
+  /* 开了之后：菜单里的项全部关闭（它们已经没有出场机会）。 */
+  L.applyConfig({
+    hidden: [],
+    order: {},
+    labels: {},
+    moved: {},
+    flags: { 'accountMenu.directSettings': true },
+  })
+  check(
+    items.every((el) => el.getAttribute('data-lc-hidden') === '1'),
+    '开了「点头像直接进设置」后，菜单里的项没有全部关闭',
+  )
+
+  /* 关掉之后恢复。 */
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {}, flags: {} })
+  check(
+    items.every((el) => el.getAttribute('data-lc-hidden') === null),
+    '关掉开关后菜单项没有恢复显示',
+  )
+
+  menu.remove()
+}
+
+/* ── 测试 29：内容区的长列表不能盖过导航 ──
+   真机上设置内容区可能有成排的按钮（插件列表每行一个「配置」），项数比导航还多。
+   靠「更靠左上」这条判据把导航选出来（jsdom 的 rect 全是 0，必须自己模拟）。 */
+{
+  buildSidebar(false)
+  const shell = document.createElement('div')
+  const header = document.createElement('div')
+  const ttl = document.createElement('span')
+  ttl.textContent = '设置'
+  const close = document.createElement('button')
+  close.setAttribute('aria-label', '关闭')
+  header.appendChild(ttl)
+  header.appendChild(close)
+
+  /* 左侧导航：3 个 tab */
+  const navColumn = document.createElement('div')
+  const nav = document.createElement('nav')
+  for (const t of ['通用', '模型', '插件']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    nav.appendChild(b)
+  }
+  navColumn.appendChild(nav)
+
+  /* 内容区：10 个「配置」按钮的长列表（项数故意比导航多） */
+  const content = document.createElement('div')
+  const list = document.createElement('div')
+  for (let i = 0; i < 10; i += 1) {
+    const row = document.createElement('div')
+    const b = document.createElement('button')
+    b.textContent = '配置'
+    row.appendChild(b)
+    list.appendChild(row)
+  }
+  content.appendChild(list)
+
+  shell.appendChild(header)
+  shell.appendChild(navColumn)
+  shell.appendChild(content)
+  document.body.appendChild(shell)
+
+  /* 模拟真实布局：导航在左上，内容列表在右下。 */
+  const rectAt = (top, left) => () => ({
+    top: top,
+    left: left,
+    right: left + 200,
+    bottom: top + 30,
+    width: 200,
+    height: 30,
+  })
+  nav.getBoundingClientRect = rectAt(60, 900)
+  navColumn.getBoundingClientRect = rectAt(60, 900)
+  list.getBoundingClientRect = rectAt(300, 1200)
+  content.getBoundingClientRect = rectAt(300, 1200)
+
+  const found = L.discoverSettingsElements('settingsNav')
+  check(found.length === 1 && found[0] === nav, '内容区有长列表时，导航被选错了')
+  const tabs = L.discoverSettingsTabs()
+  check(
+    tabs.length === 3 && tabs.every((t) => t.label !== '配置'),
+    `导航项被内容区的按钮污染了（实际 ${tabs.map((t) => t.label).join('/')}）`,
+  )
+
+  shell.remove()
+}
+
+/* ── 测试 30：「点头像直接进设置」的点击拦截两个方向 ──
+   ① 设置面板没打开 → 拦截（preventDefault），自己走借道流程打开设置；
+   ② 设置面板已经打开 → 放行（照常弹菜单）。
+   ⚠️ ② 是用户报过的 bug：他就是在设置面板里打开这个开关、当场点头像测试的，
+   那时面板已开 → 旧实现直接 return → 「点击头像没反应」。 */
+{
+  buildSidebar(false)
+  const area = document.querySelector('[class*="_settingsArea"]')
+  check(!!area, '侧栏里没有 settingsArea，无法测拦截')
+
+  const trigger = document.createElement('button')
+  trigger.setAttribute('aria-haspopup', 'menu')
+  trigger.textContent = '账号菜单'
+  if (area) area.appendChild(trigger)
+
+  const flagOn = {
+    hidden: [],
+    order: {},
+    labels: {},
+    moved: {},
+    flags: { 'accountMenu.directSettings': true },
+  }
+
+  /* 场景②：设置面板打开（buildSettingsPanel 里有「关闭」按钮）→ 必须放行 */
+  const p = buildSettingsPanel()
+  /* ⚠️ 拦截逻辑读的是**共享状态** lcGetConfig()，所以 setConfig 必须一起调
+     （真实的 updateConfig 也是两者都调）。 */
+  L.setConfig(flagOn)
+  L.applyConfig(flagOn)
+  check(L.settingsPanelOpen() === true, '测试前提不成立：设置面板应被判定为已打开')
+
+  let reached = false
+  const onPlain = () => {
+    reached = true
+  }
+  trigger.addEventListener('click', onPlain)
+  const evOpen = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })
+  trigger.dispatchEvent(evOpen)
+  check(reached === true, '设置面板已打开时，点头像被拦掉了（用户会以为「点了没反应」）')
+  check(evOpen.defaultPrevented === false, '设置面板已打开时不该 preventDefault')
+
+  /* 场景①：关掉设置面板 → 必须拦截 */
+  p.shell.remove()
+  check(L.settingsPanelOpen() === false, '测试前提不成立：设置面板应被判定为已关闭')
+
+  const evClosed = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })
+  trigger.dispatchEvent(evClosed)
+  check(evClosed.defaultPrevented === true, '设置面板未打开时，点头像没有被拦截（不会直接进设置）')
+
+  trigger.removeEventListener('click', onPlain)
+  trigger.remove()
+  L.setConfig(L.blankConfig())
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {}, flags: {} })
+}
+
+/* ── 测试 31：我们自己的按钮不能被当成设置面板的锚点 ──
+   本插件开关按钮的 aria-label 是「关闭 点头像直接进设置」，以「关闭」开头。
+   真机诊断显示：它被当成了设置面板的关闭按钮 → 推出的外壳是我们面板的 lc_body
+   → 导航永远搜不到（这就是用户报的「设置左侧导航展不开」的真根因）。 */
+{
+  buildSidebar(false)
+  const wrap = document.createElement('div')
+  wrap.className = 'lc_wrap'
+  const sw = document.createElement('button')
+  sw.setAttribute('aria-label', '关闭 点头像直接进设置')
+  wrap.appendChild(sw)
+  document.body.appendChild(wrap)
+
+  check(
+    L.closeButtons().length === 0,
+    '我们面板里的开关按钮被当成了设置面板的关闭按钮（真机踩过的 bug）',
+  )
+  check(L.looksLikeNavItem(sw) === false, '我们面板的开关按钮被算成了导航项')
+
+  wrap.remove()
+}
+
+/* ── 测试 32：真机场景 —— ✕ 没有 aria-label，靠 .lc_wrap 祖先链找导航 ──
+   设置面板结构：shell > [标题行(✕ 无 aria-label), 导航列>nav>tab×3, 内容列>我们的面板]。
+   旧实现只靠「关闭」按钮当锚点 → 一个锚点都找不到 → 导航永远发现不到。 */
+{
+  buildSidebar(false)
+  const shell = document.createElement('div')
+  shell.className = 'settingsShell'
+
+  const header = document.createElement('div')
+  const ttl = document.createElement('span')
+  ttl.textContent = '设置'
+  const close = document.createElement('button') /* 故意不给 aria-label —— 真机就是这样 */
+  header.appendChild(ttl)
+  header.appendChild(close)
+
+  const navColumn = document.createElement('div')
+  const nav = document.createElement('nav')
+  for (const t of ['通用', '模型', '插件']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    nav.appendChild(b)
+  }
+  navColumn.appendChild(nav)
+
+  const content = document.createElement('div')
+  const wrap = document.createElement('div')
+  wrap.className = 'lc_wrap'
+  const row = document.createElement('div')
+  row.className = 'lc_row'
+  const sw = document.createElement('button')
+  sw.setAttribute('aria-label', '关闭 点头像直接进设置')
+  row.appendChild(sw)
+  wrap.appendChild(row)
+  content.appendChild(wrap)
+
+  shell.appendChild(header)
+  shell.appendChild(navColumn)
+  shell.appendChild(content)
+  document.body.appendChild(shell)
+
+  const found = L.discoverSettingsElements('settingsNav')
+  check(
+    found.length === 1 && found[0] === nav,
+    '靠 .lc_wrap 祖先链没能找到设置导航（真机场景：✕ 没有 aria-label）',
+  )
+  const tabs = L.discoverSettingsTabs()
+  check(tabs.length === 3, `真机场景下 tab 数量不对（期望 3，实际 ${tabs.length}）`)
+
+  shell.remove()
+}
+
+/* ── 测试 33（bug2 正解）：用宿主锚点精确定位设置导航 ──
+   v0.1.9 的真机表现：面板里「设置左侧导航」列出来的是**别的插件页的一排按钮**
+   （诊断里看到的：–、账号、仓库、上传、仓库信息、解除绑定、下一步：选仓库、关闭），
+   于是顺序与隐藏全都作用错了对象。
+   现在认宿主的 `data-shortcut-modal="settings"` + `_navList` / `_navCell`。 */
+{
+  buildSidebar(false)
+
+  /* 干扰项：设置面板里同时挂着的「别的插件页」那排按钮（8 个，与真机诊断一致）。 */
+  const noiseBox = document.createElement('div')
+  noiseBox.className = 'ghu-slot-host'
+  for (const t of ['–', '账号', '仓库', '上传', '仓库信息', '解除绑定', '下一步：选仓库', '关闭']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    noiseBox.appendChild(b)
+  }
+  document.body.appendChild(noiseBox)
+
+  /* 真正的设置面板（结构照抄宿主 ui-settings-general 的产物）。 */
+  const overlay = document.createElement('div')
+  overlay.className = 'wCInkW_overlay'
+  const panel = document.createElement('div')
+  panel.className = 'wCInkW_panel'
+  panel.setAttribute('data-shortcut-modal', 'settings')
+  panel.setAttribute('role', 'dialog')
+
+  const nav = document.createElement('nav')
+  nav.className = 'wCInkW_nav'
+  const navTitle = document.createElement('div')
+  navTitle.className = 'wCInkW_navTitle'
+  navTitle.textContent = '设置'
+  const navList = document.createElement('div')
+  navList.className = 'wCInkW_navList'
+  const realTabs = ['账号与余额', '通用设置', '模型', '插件市场']
+  for (const t of realTabs) {
+    const cell = document.createElement('button')
+    cell.className = 'wCInkW_navCell'
+    const lb = document.createElement('span')
+    lb.className = 'wCInkW_navLabel'
+    lb.textContent = t
+    cell.appendChild(lb)
+    navList.appendChild(cell)
+  }
+  nav.appendChild(navTitle)
+  nav.appendChild(navList)
+
+  const content = document.createElement('div')
+  content.className = 'wCInkW_content'
+  const header = document.createElement('div')
+  header.className = 'wCInkW_header'
+  const close = document.createElement('button') /* ⚠️ 真机的 ✕ 没有 aria-label */
+  close.className = 'wCInkW_close'
+  header.appendChild(close)
+  const wrap = document.createElement('div')
+  wrap.className = 'lc_wrap'
+  content.appendChild(header)
+  content.appendChild(wrap)
+
+  panel.appendChild(nav)
+  panel.appendChild(content)
+  overlay.appendChild(panel)
+  document.body.appendChild(overlay)
+
+  check(L.settingsPanelOpen() === true, '设置面板开着，却判定为没打开（✕ 无 aria-label 的老问题）')
+  check(L.settingsPanelRoot() === panel, '没找到 data-shortcut-modal="settings" 的面板根')
+  check(L.settingsNavList() === navList, '没能从面板根里定位到 _navList')
+  const preciseTabs = L.discoverSettingsTabs()
+  check(
+    preciseTabs.map((t) => t.label).join('|') === realTabs.join('|'),
+    `设置导航发现了错误的项（期望 ${realTabs.join('/')}，实际 ${preciseTabs
+      .map((t) => t.label)
+      .join('/')}）`,
+  )
+  const navFound = L.discoverSettingsElements('settingsNav')
+  check(navFound.length === 1 && navFound[0] === navList, 'settingsNav 没定位到 _navList')
+
+  overlay.remove()
+  noiseBox.remove()
+}
+
+/* ── 测试 34（bug1 正解）：打开设置走「直连设置按钮」，不留任何抑制标记 ──
+   旧实现借道头像菜单（先给 <html> 打 data-lc-menu-suppress 把菜单藏起来）。
+   抑制一旦残留、或菜单是内联渲染的，界面上就会多出「隐形但占位」的东西 ——
+   用户看到的就是「点头像没进设置，反而多了个东西」。 */
+{
+  const side = buildSidebar(false)
+  const row = document.createElement('div')
+  row.className = 'wCInkW_triggerRow'
+  const btn = document.createElement('button')
+  btn.className = 'wCInkW_trigger'
+  const lbl = document.createElement('span')
+  lbl.className = 'wCInkW_triggerLabel'
+  lbl.textContent = '设置'
+  btn.appendChild(lbl)
+  row.appendChild(btn)
+  side.footArea.appendChild(row)
+
+  /* 模拟宿主：点「设置」按钮就把面板挂出来。 */
+  let opened = false
+  btn.addEventListener('click', () => {
+    opened = true
+    const ov = document.createElement('div')
+    ov.className = 'wCInkW_overlay'
+    const pn = document.createElement('div')
+    pn.setAttribute('data-shortcut-modal', 'settings')
+    ov.appendChild(pn)
+    document.body.appendChild(ov)
+  })
+
+  /* 清掉更早的测试可能留下的标记（那里走的是借道路径、轮询是异步的），
+     这里断言的是「本次直连调用没有新增抑制」。 */
+  document.documentElement.removeAttribute('data-lc-menu-suppress')
+
+  L.openSettingsViaTrigger()
+  check(opened === true, '没有走「直连设置按钮」这条路（仍在借道头像菜单）')
+  check(L.settingsPanelOpen() === true, '点了设置按钮，面板却判定为没打开')
+  check(
+    document.documentElement.hasAttribute('data-lc-menu-suppress') === false,
+    '直连打开设置后仍残留 data-lc-menu-suppress 标记（会留下隐形占位）',
+  )
+  check(
+    document.querySelectorAll('[role="menu"]').length === 0,
+    '打开设置的过程中弹出了菜单（不该经过头像菜单）',
+  )
+
+  const stuck = document.querySelector('[data-shortcut-modal="settings"]')
+  if (stuck && stuck.parentElement) stuck.parentElement.remove()
+}
+
+/* ── 测试 35：抑制样式必须「不占位」（display:none），不能用 visibility:hidden ── */
+{
+  L.applyConfig(L.blankConfig())
+  const styleEl = document.getElementById('dsh-layout-customizer-style')
+  check(!!styleEl, '样式表没有注入')
+  const css = styleEl ? String(styleEl.textContent || '') : ''
+  check(
+    /data-lc-menu-suppress[^{]*\[role="menu"\]\s*\{\s*display\s*:\s*none/.test(css),
+    '抑制样式没有用 display:none（隐形占位 = 界面上多出一块东西）',
+  )
+  check(
+    /data-lc-menu-suppress[^{]*\[role="menu"\]\s*\{\s*visibility\s*:\s*hidden/.test(css) === false,
+    '抑制样式仍在用 visibility:hidden（会占位）',
+  )
+}
+
+/* ── 测试 36（bug1 的另一半）：设置座位里的「空壳按钮」被清掉，有内容的不动 ──
+   真机上「设置」与账号按钮的 slot 内容没渲染出来时，会剩下两个有尺寸、
+   无文字、无图标的空壳 —— 用户看到的就是「凭空多了两个空白长条」。 */
+{
+  const side = buildSidebar(false)
+  const area = side.settingsArea
+  const mk = () => {
+    const b = document.createElement('button')
+    b.className = 'wCInkW_trigger'
+    return b
+  }
+  const empty1 = mk()
+  const empty2 = mk()
+  /* 正常的（有图标 + 文字）—— 绝不能被清理。 */
+  const real = mk()
+  real.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'svg'))
+  const txt = document.createElement('span')
+  txt.textContent = '设置'
+  real.appendChild(txt)
+  area.appendChild(empty1)
+  area.appendChild(empty2)
+  area.appendChild(real)
+
+  L.applyConfig(L.blankConfig())
+  const H = 'data-lc-hidden'
+  check(empty1.getAttribute(H) === '1', '空的设置按钮壳没被清理（界面上会留下空白长条）')
+  check(empty2.getAttribute(H) === '1', '第二个空的设置按钮壳没被清理')
+  check(real.getAttribute(H) !== '1', '有图标有文字的设置按钮被误清理了')
+
+  /* 空壳后来又渲染出内容 → 必须自动恢复（清理是双向的）。 */
+  const later = document.createElement('span')
+  later.textContent = '更多'
+  empty1.appendChild(later)
+  L.applyConfig(L.blankConfig())
+  check(empty1.getAttribute(H) !== '1', '空壳恢复内容后没有还原（清理成了单向操作）')
+}
+
 console.log('')
 if (problems.length) {
   console.log('发现问题 ✗')
@@ -756,3 +1683,24 @@ console.log('  · 图标全隐藏时面板区容器收起')
 console.log('  · 幂等：重复 apply 零 DOM 变动（不自触发闪烁）')
 console.log('  · 底部插件区按钮样式已统一成插件区规格')
 console.log('  · 底部插件的浮层不被遮挡（抬高 z-index，不改插件源码）')
+console.log('  · 头像菜单的三个控件可单独隐藏（标签不含快捷键）')
+console.log('  · 菜单在顶部压住头像时自动翻到下方，且幂等、不碰宿主 top')
+console.log('  · 设置面板的 tab 可搬到左侧栏（原 tab 隐藏，移回即还原）')
+console.log('  · 底部插件区的插件可像插件区一样单独隐藏')
+console.log('  · 容器内细项可调整顺序（不再反向），且幂等')
+console.log('  · 搬家记录 moved 被共享状态保留（不会刷新后弹回原位）')
+console.log('  · 设置面板只留「左侧导航」一个可配置项（标题栏/内容区不再被隐藏）')
+console.log('  · 头像菜单有静态兜底清单，菜单没点开也能在面板里展开')
+console.log('  · 头像菜单三项支持排序（真的重排菜单 DOM，且幂等）')
+console.log('  · 设置导航 tab 的顺序被真正执行（不只是存下来，且幂等）')
+console.log('  · 导航发现扛得住假锚点（多个「关闭」按钮）与扁平/包层两种结构')
+console.log('  · 内容区的长列表（成排按钮）不会盖过导航')
+console.log('  · 「点头像直接进设置」开关：判定正确，开启后菜单项全部关闭')
+console.log('  · 点头像的拦截：面板未开→拦截；面板已开→放行（不再「点了没反应」）')
+console.log('  · 我们自己的按钮不会被当成设置面板锚点（真机踩过）')
+console.log('  · 真机场景（✕ 无 aria-label）：靠 .lc_wrap 祖先链找到设置导航')
+console.log('  · 设置导航按宿主锚点精确定位（不再抓到别的插件页那排按钮）')
+console.log('  · 打开设置走直连设置按钮，不弹菜单、不留抑制标记')
+console.log('  · 菜单抑制用 display:none（不会留下隐形占位）')
+console.log('  · 设置座位里的空壳按钮被清掉，有内容的不动、恢复内容能还原')
+console.log('  · flags（行为开关）被共享状态保留')
