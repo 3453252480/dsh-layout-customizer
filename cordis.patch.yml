@@ -1,0 +1,8 @@
+# dsh-layout-customizer bundle patch:
+# 把「界面布局自定义」注册进 web profile 名单。
+# Host 半在本包 lib/index.js（布局配置持久化 + /api/layout-customizer 路由）；
+# 浏览器半（左栏底部按钮 + 布局浮层）由 profile 的 dsh.profile.bundles 名单
+# 依据上面的 dsh.client 声明驱动加载。
+- insert:
+    - id: layout-customizer
+      name: 'dsh-layout-customizer'

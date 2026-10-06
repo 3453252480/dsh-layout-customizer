@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 本地配置 —— 可能含本机绝对路径，不要提交
+cordis.local.yml
+*.local.yml
+.env
+.env.*
+
+# 编辑器 / 操作系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
