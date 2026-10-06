@@ -1063,6 +1063,94 @@ v0.1.10 的两处修复都有确凿依据（宿主源码 + 诊断记录），但
 重启后若侧栏仍有异常空块，读 `~/.dsh/storages/layout-customizer-diag.json`
 里的这条记录，就能直接看出是哪个元素（连宽高都在），不用再猜。
 
+---
+
+## v0.1.12：按真机诊断重做两处（v0.1.11 的两条判断是错的）
+
+用户重启后的反馈：「点十次才进得去一次设置」+「设置左栏还是那 8 个别的插件按钮」。
+探针没白加 —— 读回现场后，两条结论直接推翻了 v0.1.11 的假设。
+
+### 1. 🔴 「capture 拦截 + 自己点」= 自己拦自己（这就是「点十次进一次」）
+
+`settings-slot-snapshot` 显示设置座位里那个按钮是**头像启动器**
+（`yHnPSG_trigger`，文本 `fate`、260×44）。而 v0.1.11 写的
+
+```js
+const LC_SETTINGS_TRIGGER_SELECTOR =
+  '[class*="_triggerRow"] button[class*="_trigger"],[class*="_triggerRow"] button'
+```
+
+**把它也匹配进去了**（`yHnPSG_trigger` 里含 `_trigger`）。于是流程变成：
+
+> capture 阶段拦截用户点击 → 自己 `trigger.click()` → **又进同一个拦截器** →
+> 递归 → 栈溢出 → 宿主永远收不到点击 → 十次里偶尔靠 `lcAllowTriggerClick`
+> 放行一次才成功
+
+**修法**：
+
+- 删掉那个选择器，改为按**文本**找设置按钮（`lcSettingsTriggerButton()`：
+  文本 / aria-label 含「设置」），找不到就老实走借道；
+- 「点头像直接进设置」**不再拦截用户事件**：照常让宿主处理这次点击
+  （菜单正常弹出），我们在**冒泡阶段**接管 —— React 的委托挂在根容器上、
+  先于我们执行，所以轮到我们时菜单已渲染，同一帧 paint 之前打上抑制标记
+  （`display:none`）把它藏掉，然后点掉菜单里的「设置」。
+
+### 2. 🔴 `menus: 0` —— 账号菜单根本不是 `[role="menu"]` 浮层
+
+6 条 `open-settings-failed` 的 payload 完全一致：
+
+```json
+{"tries":61,"menus":0,"items":[]}
+```
+
+`menus: 0` = `lcFloatingMenus()`（`[role="menu"]` + `position:fixed`）一个都没找到。
+旧实现只认那个形状 → 借道路径永远点不到「设置」。
+
+**修法**：`lcDiscoverAccountMenuItems()` 从「只认浮层」放宽为
+「浮层菜单 → 所有 `[role=menu]` 容器 → 所有 `[role=menuitem]`」；
+找「设置」项用三级判据（`lcFindSettingsMenuItem`）：
+
+1. 点击后**新出现**的可点击元素里，文本正好是「设置」的
+   —— 唯一不依赖节点 shape 的判据（菜单是什么标签都能认）；
+2. `[role="menuitem"]` 里文本正好「设置」的；
+3. 全页可点击项里文本正好「设置」的（连侧栏设置入口一起算，
+   点到它结果同样是「打开设置」，不会做错事）。
+
+### 3. 设置导航：换成与类名无关的 `<nav>` 判据
+
+v0.1.11 押注 `data-shortcut-modal="settings"` + `_navList` / `_navCell`，
+真机上**没有命中**（面板里列出的仍是那 8 项）。这次不再赌类名，改用宿主源码里
+**结构层面**的事实：
+
+> 设置面板左栏是 `<nav className={styles.nav}>` 包住的按钮列表；
+> 设置面板里其它成组的按钮（插件配置表单、内容区列表、我们自己的面板）
+> **都不是 `<nav>`** —— 真机诊断里那 8 个干扰按钮所在的容器就是 `div.ghu-slot-host`。
+
+`lcSettingsNavByTag()`：从我们自己的面板 `.lc_wrap` 往上逐层找，谁里面有 `<nav>`
+（排除侧栏插件区的 `nav._panelList`）且 nav 里有 ≥2 个可点击项，就认它。
+
+判据顺序现在是：
+
+| 顺序 | 判据 | 依赖 |
+| --- | --- | --- |
+| ① | `data-shortcut-modal="settings"` → `_navList` → `_navCell` | 宿主类名（可能对不上） |
+| ② | `.lc_wrap` 祖先里的 `<nav>` | **纯结构，不吃类名** |
+| ③ | 旧的「成组的短文本可点击项」推断 | 兜底 |
+
+### 4. 诊断再加一层
+
+`settings-discovery-fallback`：①②③ 全灭时上报一次，含
+`panelFound` / `navListFound` / `navTagFound` / 各判据取到的标签 /
+页面上每个 `<nav>` 的类名与项数 —— 再出问题也能一眼看出来。
+
+### 新增/调整的回归测试
+
+| # | 断言 |
+| --- | --- |
+| 30（改语义） | 点头像**不再** preventDefault（会让宿主收不到点击），随后自动点掉菜单里的「设置」；菜单故意造成**非 `role=menu` 的内联形状**（真机就是这样） |
+| 37 | `lcFindSettingsMenuItem` 能从「新出现的元素」里找到设置项 |
+| 38 | 设置面板**不给任何类名**、只留 `<nav>`、旁边还放那 8 个干扰按钮时，导航仍被正确定位 |
+
 
 
 

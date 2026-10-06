@@ -1391,18 +1391,103 @@ function buildSettingsPanel() {
   check(reached === true, '设置面板已打开时，点头像被拦掉了（用户会以为「点了没反应」）')
   check(evOpen.defaultPrevented === false, '设置面板已打开时不该 preventDefault')
 
-  /* 场景①：关掉设置面板 → 必须拦截 */
+  /* 场景①：关掉设置面板 → **不再拦截宿主**，而是接管「菜单弹出后点掉设置项」
+     （v0.1.11 之前在 capture 阶段拦截并自己 trigger.click()，会自己拦自己 → 栈溢出） */
   p.shell.remove()
   check(L.settingsPanelOpen() === false, '测试前提不成立：设置面板应被判定为已关闭')
 
+  /* 模拟宿主：点头像 → 插入一个**不是 [role=menu] 浮层**的菜单（真机就是这种） */
+  let menuClicked = false
+  let fakeMenu = null
+  const onHost = () => {
+    fakeMenu = document.createElement('div')
+    fakeMenu.className = 'fakeInlineMenu'
+    const item = document.createElement('button')
+    item.textContent = '设置'
+    item.addEventListener('click', () => {
+      menuClicked = true
+    })
+    fakeMenu.appendChild(item)
+    document.body.appendChild(fakeMenu)
+  }
+  trigger.addEventListener('click', onHost)
+
   const evClosed = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })
   trigger.dispatchEvent(evClosed)
-  check(evClosed.defaultPrevented === true, '设置面板未打开时，点头像没有被拦截（不会直接进设置）')
+  check(evClosed.defaultPrevented === false, '点头像不该再 preventDefault（会让宿主收不到点击）')
+  check(fakeMenu !== null, '测试桩没生效：宿主没插菜单')
 
+  await new Promise((r) => setTimeout(r, 200))
+  check(menuClicked === true, '点头像之后没有自动点掉菜单里的「设置」')
+
+  trigger.removeEventListener('click', onHost)
   trigger.removeEventListener('click', onPlain)
+  if (fakeMenu) fakeMenu.remove()
   trigger.remove()
   L.setConfig(L.blankConfig())
   L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {}, flags: {} })
+}
+
+/* ── 测试 37：`lcFindSettingsMenuItem` 能认「新出现的元素」 ──
+   真机上账号菜单不是 `[role="menu"]` 浮层（诊断里 menus 恒为 0），
+   所以「点击前后求差集」是唯一靠得住的判据。 */
+{
+  const before = L.clickableSet()
+  const box = document.createElement('div')
+  const item = document.createElement('button')
+  item.textContent = '设置'
+  box.appendChild(item)
+  document.body.appendChild(box)
+
+  const hit = L.findSettingsMenuItem(before)
+  check(!!hit && hit.element === item, '没能从「新出现的元素」里找到设置项')
+  box.remove()
+}
+
+/* ── 测试 38（bug2 回归）：设置导航用 `<nav>` 判据定位，且不吃类名 ──
+   真机上 `data-shortcut-modal` / `_navList` / `_navCell` 那条链路没有命中，
+   面板里列出的仍是 `div.ghu-slot-host` 里那 8 个别的插件的按钮。
+   这里**故意不给**设置面板任何类名，只保留宿主源码里的 `<nav>`。 */
+{
+  buildSidebar(false)
+
+  const noise = document.createElement('div')
+  noise.className = 'ghu-slot-host'
+  for (const t of ['–', '账号', '仓库', '上传', '仓库信息', '解除绑定', '下一步：选仓库', '关闭']) {
+    const b = document.createElement('button')
+    b.textContent = t
+    noise.appendChild(b)
+  }
+  document.body.appendChild(noise)
+
+  const shell = document.createElement('div')
+  const nav = document.createElement('nav')
+  const labels = ['账号与余额', '通用设置', '模型', '插件市场']
+  for (const t of labels) {
+    const b = document.createElement('button')
+    b.textContent = t
+    nav.appendChild(b)
+  }
+  const content = document.createElement('div')
+  const wrap = document.createElement('div')
+  wrap.className = 'lc_wrap'
+  content.appendChild(wrap)
+  shell.appendChild(nav)
+  shell.appendChild(content)
+  document.body.appendChild(shell)
+
+  const tabs = L.discoverSettingsTabs()
+  check(
+    tabs.map((t) => t.label).join('|') === labels.join('|'),
+    `设置导航取错了项（期望 ${labels.join('/')}，实际 ${tabs
+      .map((t) => t.label)
+      .join('/')}）`,
+  )
+  const navFound = L.discoverSettingsElements('settingsNav')
+  check(navFound.length === 1 && navFound[0] === nav, 'settingsNav 没定位到 <nav>（结构判据失效）')
+
+  shell.remove()
+  noise.remove()
 }
 
 /* ── 测试 31：我们自己的按钮不能被当成设置面板的锚点 ──
@@ -1573,7 +1658,9 @@ function buildSettingsPanel() {
   lbl.textContent = '设置'
   btn.appendChild(lbl)
   row.appendChild(btn)
-  side.footArea.appendChild(row)
+  /* ⚠️ 必须放进 `_settingsArea`：宿主那个「设置」入口就在设置座位里
+     （v0.1.12 起按**文本**找它，不再用 `_trigger` 类名泛匹配）。 */
+  side.settingsArea.appendChild(row)
 
   /* 模拟宿主：点「设置」按钮就把面板挂出来。 */
   let opened = false
@@ -1703,4 +1790,6 @@ console.log('  · 设置导航按宿主锚点精确定位（不再抓到别的�
 console.log('  · 打开设置走直连设置按钮，不弹菜单、不留抑制标记')
 console.log('  · 菜单抑制用 display:none（不会留下隐形占位）')
 console.log('  · 设置座位里的空壳按钮被清掉，有内容的不动、恢复内容能还原')
+console.log('  · 点头像不再拦宿主，而是自动点掉菜单里的「设置」（含非 role=menu 的内联菜单）')
+console.log('  · 设置导航用 <nav> 判据定位，干扰按钮与类名变化都不影响')
 console.log('  · flags（行为开关）被共享状态保留')
