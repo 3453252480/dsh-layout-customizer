@@ -59,6 +59,32 @@ try {
   assert.ok(maxed.region >= 100, '展开最大后工作区没有保留最小空间')
   const ratio = await page.evaluate(() => localStorage.getItem('dsh-layout-customizer:sidebar-split'))
   assert.ok(ratio && Number(ratio) > 0 && Number(ratio) < 1, '双击展开最大后没有记住比例')
+
+  // 内容超过可用高度：只显示装得下的（用上限 + 滚动），不是硬把内容全塞进去。
+  const bigInfo = await page.evaluate(() => {
+    const nav = document.querySelector('nav')
+    const visible = Array.from(nav.children).filter((el) => el.getBoundingClientRect().height > 0)
+    const style = getComputedStyle(nav)
+    const padTop = parseFloat(style.paddingTop) || 0
+    const padBottom = parseFloat(style.paddingBottom) || 0
+    const navRect = nav.getBoundingClientRect()
+    const first = visible[0].getBoundingClientRect()
+    const last = visible[visible.length - 1].getBoundingClientRect()
+    const content = (first.top - navRect.top + nav.scrollTop) + (last.bottom - first.top) + padBottom
+    const region = document.querySelector('section').getBoundingClientRect().height
+    return {
+      content: Math.round(content),
+      maximum: Math.round(window.L.splitMaximum(navRect.height + region)),
+      hasScroll: nav.scrollHeight > nav.clientHeight + 1,
+      padTop,
+    }
+  })
+  assert.ok(
+    bigInfo.content > bigInfo.maximum + 40,
+    `测试前提不成立：内容(${bigInfo.content})没有明显超过上限(${bigInfo.maximum})`,
+  )
+  assert.ok(Math.abs(maxed.nav - bigInfo.maximum) <= 4, '内容超过上限时没有停在上限')
+  assert.ok(bigInfo.hasScroll, '内容超过上限时应该能滚动')
   await load()
   assert.ok(Math.abs((await sizes()).nav - maxed.nav) <= 4, '双击展开最大后刷新没有恢复高度')
 
@@ -102,6 +128,64 @@ try {
     await page.evaluate(() => localStorage.getItem('dsh-layout-customizer:sidebar-split')),
     null,
     'Alt+双击没有恢复自动分配',
+  )
+
+  /*
+   * 插件很少（内容 < 可用上限）时：
+   *   自动状态本来就是「全部显示」，双击 → 收起为两个插件；
+   *   再双击 → 展开，落点必须是**内容高度**（不留空白），而不是可用上限。
+   *   这个「贴内容」的高度还要能被记住，刷新后不能又被托回 72px 下限。
+   */
+  await load()
+  const fewInfo = await page.evaluate(() => {
+    const nav = document.querySelector('nav')
+    Array.from(nav.children).slice(4).forEach((el) => el.remove())
+    window.L.refreshPluginPages()
+    const visible = Array.from(nav.children).filter((el) => el.getBoundingClientRect().height > 0)
+    const style = getComputedStyle(nav)
+    const padTop = parseFloat(style.paddingTop) || 0
+    const padBottom = parseFloat(style.paddingBottom) || 0
+    const navRect = nav.getBoundingClientRect()
+    const first = visible[0].getBoundingClientRect()
+    const last = visible[visible.length - 1].getBoundingClientRect()
+    const content = (first.top - navRect.top + nav.scrollTop) + (last.bottom - first.top) + padBottom
+    const region = document.querySelector('section').getBoundingClientRect().height
+    return {
+      content: Math.round(content),
+      maximum: Math.round(window.L.splitMaximum(navRect.height + region)),
+      rows: visible.length,
+      height: Math.round(navRect.height),
+      padTop,
+    }
+  })
+  assert.equal(fewInfo.rows, 4, '测试前提不成立：插件没有减到 4 个')
+  assert.ok(
+    fewInfo.content < fewInfo.maximum - 40,
+    `测试前提不成立：内容(${fewInfo.content})没有明显小于上限(${fewInfo.maximum})`,
+  )
+  /* 自动状态已经贴合内容（无空白），双击按「已展开」处理 → 收起两个插件。 */
+  await page.locator('.lc_sidebarSplit').dblclick()
+  const fewMin = await sizes()
+  assert.ok(fewMin.nav < fewInfo.content - 4, `插件少时双击收起没有变小：${fewMin.nav} vs 内容 ${fewInfo.content}`)
+  /* 收起后双击 → 展开：贴合内容，不许留空白。 */
+  await page.locator('.lc_sidebarSplit').dblclick()
+  const fewOpen = await sizes()
+  assert.ok(
+    Math.abs(fewOpen.nav - fewInfo.content) <= 3,
+    `插件少时双击展开留了空白：nav=${fewOpen.nav} 内容=${fewInfo.content} 上限=${fewInfo.maximum}`,
+  )
+  /* 贴内容的高度要能被记住：刷新后仍是内容高度，不能被托回下限。 */
+  await load()
+  const fewReload = await page.evaluate(() => {
+    const nav = document.querySelector('nav')
+    Array.from(nav.children).slice(4).forEach((el) => el.remove())
+    window.L.refreshPluginPages()
+    const navRect = nav.getBoundingClientRect()
+    return Math.round(navRect.height)
+  })
+  assert.ok(
+    Math.abs(fewReload - fewInfo.content) <= 3,
+    `刷新后「贴内容」的高度被改了：${fewReload} vs ${fewInfo.content}`,
   )
 
   await page.setViewportSize({ width: 1200, height: 450 })
