@@ -14,9 +14,12 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = 'C:\\Users\\syste\\.dsh\\plugins-src\\dsh-layout-customizer'
+/* 项目根按脚本自身位置推导，换机器 / 换目录都不会写错地方
+   （旧版把根目录写死成 .dsh\plugins-src，迁移后一度把产物写到废弃目录）。 */
+const ROOT = dirname(fileURLToPath(import.meta.url))
 const SRC = join(ROOT, 'lib', 'client')
 const OUT = join(ROOT, 'lib', 'client.js')
 
@@ -60,6 +63,9 @@ ${chunks.join('\n\n')}
 			levelOf: lcLevelOf,
 			discoverContainerChildren: lcDiscoverContainerChildren,
 			applyMoves: lcApplyMoves,
+			subjectIsSelf: lcSubjectIsSelf,
+			subjectNames: LC_SELF_NAMES,
+			panel: LayoutCustomizerPanel,
 			movableContainers: LC_MOVABLE_CONTAINERS,
 			selectors: LC_SELECTORS,
 			targets: ALL_TARGETS,

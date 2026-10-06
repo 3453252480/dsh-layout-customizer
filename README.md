@@ -7,6 +7,11 @@
 用户明确要求不要占左栏位置。布局一旦保存，即使从不打开设置页也一直生效
 （浏览器半启动时会自动载入并应用）。
 
+⚠️ **面板只在本插件自己的详情页出现**：`plugins.detail.section` 是宿主给
+**每个**插件详情页都渲染的 slot，条目必须自己看 `subject` 判断归属，
+对别人的页面返回 `null`（v0.1.2 修的就是这个——旧版忽略了 `subject`，
+于是面板挂在了每个插件页的最下面）。
+
 ## 能改什么
 
 **左侧栏**
@@ -387,7 +392,42 @@ after the rows on a bundle's page, **after the configuration** on a row's or an
 official plugin's page」——正好是配置卡下方，所以配置卡（总开关）在上、
 布局面板在下，两者并存不冲突。
 
-组件只用 React hooks，不依赖详情页给的具体 props，所以将来位置变了也容易搬。
+### 🔴 slot 的 `subject`：必须自己判断归属（v0.1.2 踩过的坑）
+
+这个 slot 是**全插件共用**的：宿主对**每一个**插件详情页都渲染它的全部条目，
+文档写得很直白——「An entry draws its own section chrome and **renders null for
+a subject it has nothing for**」。忽略 `subject` 的后果就是面板出现在每个插件页
+最下面（用户 2026-10-06 报的问题）。
+
+宿主渲染条目时传入的 owner props 只有一个 `subject`，三种形态：
+
+| kind | 形状 | 出现在 |
+| --- | --- | --- |
+| `bundle` | `{ kind:'bundle', pkg }` | 组合包页（组件列表之后） |
+| `row` | `{ kind:'row', pkg, row }` | 行页（配置之后） |
+| `item` | `{ kind:'item', id }` | 官方插件页（配置之后） |
+
+`pkg` 携带 `name / version / installed / enabled / rows`。2026-10-06 从运行中的
+GUI 实际读到的样本（官方组合包页）：
+
+```json
+{"kind":"bundle","pkg":{"name":"@deepseek-ai/dsh-experimental-agent-team-profile",
+ "version":"0.2.0-rc.2","installed":false,"enabled":true,
+ "rows":[{"rowId":"agent-team","moduleName":"@deepseek-ai/dsh-experimental-agent-team","enabled":true}]}}
+```
+
+实现要点（见 `lib/client/panel.src.js` 的 `lcSubjectIsSelf`）：
+
+1. **不写死字段路径**：把 `subject` / `subject.pkg` / `subject.row` 上的
+   `name / id / pkg / package / packageName / rowId / moduleName` 都收集起来，
+   只要有一个等于 `dsh-layout-customizer`（或短名 `layout-customizer`）就认作自己的页面。
+   这样宿主改字段名不会漏判，别人的包名不同也不会误判。
+2. **入口拆两层**：外层组件不调用任何 React hooks，只决定「返回 `null`」还是
+   「挂载内层」。否则同一实例在页面之间切换时 hooks 数量变化，React 会报
+   「Rendered more hooks than during the previous render」。
+3. 回归测试：`node _subject_test.mjs`（16 个断言，含上面那个真实样本）。
+
+组件本体只用 React hooks，不依赖详情页给的具体 props，所以将来位置变了也容易搬。
 
 ## 怎么让插件出现在「设置 → 插件」列表里（带配置卡）
 

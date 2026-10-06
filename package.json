@@ -1,6 +1,6 @@
 {
   "name": "dsh-layout-customizer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "界面布局自定义：隐藏或调整 DSH 左侧栏、设置面板各控件的位置，可在浮层或页面上直接拖动",
   "type": "module",
   "main": "lib/index.js",
