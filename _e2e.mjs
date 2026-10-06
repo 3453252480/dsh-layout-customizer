@@ -5,7 +5,10 @@
  *   1. window.__ModuleLoader__.load 被正确调用，id 正确
  *   2. factory 能执行（require('react') 可解析）
  *   3. 导出 apply / inject，且类型正确
- *   4. apply 能在假 ctx 下跑完不抛错，并注册到 plugins.detail.section
+ *   4. apply 能在假 ctx 下跑完不抛错，并注册**三个**入口：
+ *        · plugins.detail.section —— 设置 → 插件 → 本插件详情页的配置卡下方
+ *        · sidebar.panellist     —— 左侧栏插件区末尾的「布局自定义」图标
+ *        · main                  —— 与图标同 key 的主内容区页面
  *   5. 组件真的能被渲染（这一步才能抓住 React 名字不匹配之类的错误）
  *
  * ⚠️ 重要：**不能**在全局注入 React。
@@ -33,6 +36,8 @@ const code = readFileSync(FILE, 'utf8')
 /* ── 1) 捕获 __ModuleLoader__.load ── */
 let loaded = null
 globalThis.window = {
+  addEventListener() {},
+  removeEventListener() {},
   __ModuleLoader__: {
     load(spec) {
       loaded = spec
@@ -102,14 +107,54 @@ if (loaded && typeof loaded.factory === 'function') {
   }
 }
 
-let injectedSlot = null
-let registered = null
+const registrations = []
+const injectedSlots = []
 
 if (mod) {
   if (typeof mod.apply !== 'function') problems.push('apply 不是函数')
   if (!Array.isArray(mod.inject)) problems.push('inject 不是数组: ' + JSON.stringify(mod.inject))
 
+  const internals = mod.__lcInternals || {}
+  const mainPanelId = internals.mainPanelId
+
+  /*
+   * 假 slots。
+   *
+   * 1) 记录**全部**注册项：现在有三个入口，不能像旧版那样只留最后一个。
+   * 2) entries 故意把我们自己的插件区条目也返回出去，用来验证
+   *    `layout-customizer:` 前缀约定 —— 它必须被 lcNativeMainPanels 过滤掉，
+   *    否则会被当成「可搬到设置导航的原生面板」，而它并没有对应的镜像 key，
+   *    搬过去就是一个点了没反应的坏入口。
+   */
+  const fakeSlots = {
+    inject: (key, cb) => {
+      injectedSlots.push(key)
+      if (typeof cb === 'function') cb()
+      return () => {}
+    },
+    register: (options, component) => {
+      registrations.push({ options, component })
+      return () => {}
+    },
+    entries: (name) => {
+      if (!mainPanelId) return []
+      if (name === 'sidebar.panellist') {
+        return [{ options: { id: mainPanelId, label: internals.mainPanelLabel } }]
+      }
+      if (name === 'main') return [{ options: { key: mainPanelId } }]
+      return []
+    },
+    entriesOfSlot: () => [],
+    subscribe: () => () => {},
+  }
+  const fakeLayout = { selectPanel() {}, panelInfo: null }
+
   const fakeCtx = {
+    /* entry 用 ctx.inject(['layout'], cb) 拿 layout 服务。 */
+    inject: (keys, cb) => {
+      if (typeof cb === 'function') cb({ get: (key) => (key === 'layout' ? fakeLayout : undefined) })
+      return { dispose() {} }
+    },
     effect: (fn) => {
       try {
         const d = typeof fn === 'function' ? fn() : undefined
@@ -118,16 +163,7 @@ if (mod) {
         problems.push('ctx.effect 回调抛错: ' + error.message)
       }
     },
-    slots: {
-      inject: (key, cb) => {
-        injectedSlot = key
-        if (typeof cb === 'function') cb()
-      },
-      register: (options, component) => {
-        registered = { options, component }
-        return () => {}
-      },
-    },
+    slots: fakeSlots,
   }
 
   try {
@@ -136,27 +172,35 @@ if (mod) {
     problems.push('apply() 抛错: ' + error.message)
   }
 
-  if (injectedSlot !== 'plugins.detail.section') problems.push('注册的 slot 不对: ' + injectedSlot)
-  if (!registered) {
-    problems.push('没有注册组件')
+  const findBy = (slotName, keyField, keyValue) =>
+    registrations.find(
+      (r) =>
+        r.options &&
+        r.options.name === slotName &&
+        (keyField === null || r.options[keyField] === keyValue),
+    )
+
+  /* ── 入口 1：设置 → 插件 → 本插件详情页的配置卡下方 ── */
+  if (injectedSlots.indexOf('plugins.detail.section') === -1) {
+    problems.push('没有注入 plugins.detail.section；实际注入：' + injectedSlots.join(', '))
+  }
+
+  const detail = findBy('plugins.detail.section', null, null)
+  if (!detail) {
+    problems.push('没有注册详情页面板')
   } else {
-    if (registered.options.id !== 'layout-customizer') problems.push('注册 id 不对')
-    if (typeof registered.component !== 'function') problems.push('注册组件不是函数')
+    if (detail.options.id !== 'layout-customizer') problems.push('详情页注册 id 不对')
+    if (typeof detail.component !== 'function') problems.push('详情页注册组件不是函数')
 
     /* 关键一步：用 react-dom/server 真正渲染组件。
-       必须真实渲染，才能抓到 React 名字不匹配、hooks 用法错误这类问题。
-       直接调用组件函数是无效的（hooks 在 React 环境外无法工作）。
-
-       注意：plugins.detail.section 是宿主对**每个**插件详情页都渲染的 slot，
+       plugins.detail.section 是宿主对**每个**插件详情页都渲染的 slot，
        条目必须看 subject 判断归属（对自己无话可说的返回 null）。
-       所以这里两种 subject 都要测：别人的页面必须渲染成空。 */
+       所以两种 subject 都要测：别人的页面必须渲染成空。 */
     const renderWith = (subject) =>
       ReactDOMServer.renderToStaticMarkup(
-        ReactImpl.createElement(registered.component, { subject }),
+        ReactImpl.createElement(detail.component, { subject }),
       )
     try {
-      /* ① 别人的详情页：必须渲染成空字符串（= 返回 null），
-            否则面板会挂在每个插件页最下面（v0.1.1 的 bug）。 */
       const otherHtml = renderWith({
         kind: 'bundle',
         pkg: { name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: '0.2.0-rc.2' },
@@ -165,19 +209,82 @@ if (mod) {
         problems.push('别人的详情页也渲染了内容（应当返回 null）: ' + otherHtml.slice(0, 120))
       }
 
-      /* ② 本插件自己的详情页：必须渲染出面板本体。 */
       const html = renderWith({ kind: 'bundle', pkg: { name: 'dsh-layout-customizer' } })
       if (!html || typeof html !== 'string' || html === '') {
         problems.push('SSR 渲染没产出 HTML（本插件自己的详情页）')
       } else if (!html.includes('lc_wrap')) {
-        /* 面板容器应该有 lc_wrap 类；没有说明渲染树不对。 */
         problems.push('渲染结果里没有找到面板（lc_wrap）。HTML 片段: ' + html.slice(0, 200))
       } else if (!html.includes('界面布局')) {
-        /* 确认面板标题文字渲染出来了。 */
         problems.push('渲染结果里没有面板标题文字')
       }
     } catch (error) {
       problems.push('渲染组件抛错（这正是按钮不显示的典型原因）: ' + error.message)
+    }
+  }
+
+  /* ── 入口 2：左侧栏插件区图标 ── */
+  const icon = findBy('sidebar.panellist', 'id', mainPanelId)
+  if (!mainPanelId) {
+    problems.push('__lcInternals 里没有 mainPanelId')
+  } else if (!icon) {
+    problems.push('没有在 sidebar.panellist 注册「布局自定义」图标')
+  } else {
+    if (String(mainPanelId).indexOf('layout-customizer:') !== 0) {
+      problems.push(
+        '插件区主面板 id 必须带 layout-customizer: 前缀（否则会被当成可搬到设置页的原生面板）: ' +
+          mainPanelId,
+      )
+    }
+    if (icon.options.label !== internals.mainPanelLabel) problems.push('插件区图标的 label 不对')
+    /* 位置：必须排在现役图标之后（现役最大 order = 30 = 蔬东坡工作台）。 */
+    if (typeof icon.options.order !== 'number' || icon.options.order <= 30) {
+      problems.push('插件区图标 order 必须大于 30（蔬东坡），实际: ' + icon.options.order)
+    }
+
+    try {
+      const svg16 = ReactDOMServer.renderToStaticMarkup(
+        ReactImpl.createElement(icon.component, { size: 16, active: false }),
+      )
+      const svg20 = ReactDOMServer.renderToStaticMarkup(
+        ReactImpl.createElement(icon.component, { size: 20, active: true }),
+      )
+      if (!svg16.includes('<svg')) problems.push('插件区图标没渲染出 svg: ' + svg16.slice(0, 120))
+      if (!svg16.includes('width="16"')) {
+        problems.push('插件区图标没有跟随宿主给的尺寸(16): ' + svg16.slice(0, 120))
+      }
+      if (!svg20.includes('width="20"')) {
+        problems.push('插件区图标没有跟随宿主给的尺寸(20): ' + svg20.slice(0, 120))
+      }
+    } catch (error) {
+      problems.push('渲染插件区图标抛错: ' + error.message)
+    }
+
+    /* 前缀约定的另一半：我们的条目不能被当成「原生插件面板」。 */
+    if (typeof internals.nativePanelForLabel === 'function') {
+      if (internals.nativePanelForLabel(internals.mainPanelLabel)) {
+        problems.push(
+          '「' + internals.mainPanelLabel + '」被当成了可搬到设置导航的原生面板（前缀约定失效）',
+        )
+      }
+    }
+  }
+
+  /* ── 入口 3：与图标配对的主内容区页面 ── */
+  const page = findBy('main', 'key', mainPanelId)
+  if (mainPanelId && !page) {
+    problems.push('没有注册与插件区图标配对的主面板（main key = ' + mainPanelId + '）')
+  } else if (page) {
+    try {
+      const html = ReactDOMServer.renderToStaticMarkup(ReactImpl.createElement(page.component, {}))
+      if (!html.includes('lc_mainPage')) {
+        problems.push('主面板没渲染出页面容器: ' + html.slice(0, 200))
+      } else if (!html.includes('lc_wrap')) {
+        problems.push('主面板里没有复用布局面板（lc_wrap）')
+      } else if (!html.includes('返回对话')) {
+        problems.push('主面板没有「返回对话」按钮')
+      }
+    } catch (error) {
+      problems.push('渲染主面板抛错: ' + error.message)
     }
   }
 }
@@ -187,8 +294,11 @@ console.log('load 被调用:', !!loaded)
 console.log('factory 执行:', !!mod)
 console.log('模块导出:', mod ? Object.keys(mod).join(', ') : '(无)')
 console.log('inject:', mod ? JSON.stringify(mod.inject) : '(无)')
-console.log('注册的 slot:', injectedSlot)
-console.log('注册的组件 id:', registered ? registered.options.id : '(无)')
+console.log('注入的 slot:', injectedSlots.join(', ') || '(无)')
+console.log(
+  '注册项:',
+  registrations.map((r) => r.options.name + '[' + (r.options.id || r.options.key || '') + ']').join(' | ') || '(无)',
+)
 console.log('全局 React 泄漏:', typeof globalThis.React !== 'undefined' ? '有（会掩盖 bug）' : '无 ✓')
 console.log('')
 

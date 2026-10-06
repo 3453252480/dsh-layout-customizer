@@ -24,7 +24,7 @@ const SRC = join(ROOT, 'lib', 'client')
 const OUT = join(ROOT, 'lib', 'client.js')
 
 /** 按依赖顺序拼接的片段文件。 */
-const PARTS = ['catalog.src.js', 'state.src.js', 'engine.src.js', 'panel.src.js', 'entry.src.js']
+const PARTS = ['catalog.src.js', 'state.src.js', 'icons.src.js', 'engine.src.js', 'panel.src.js', 'panelmain.src.js', 'main.src.js', 'splitter.src.js', 'responsive.src.js', 'entry.src.js']
 
 const chunks = []
 for (const name of PARTS) {
@@ -81,6 +81,8 @@ ${chunks.join('\n\n')}
 			settingsNavByTag: lcSettingsNavByTag,
 			settingsOverlayRoot: lcSettingsOverlayRoot,
 			sidebarScope: lcSidebarScope,
+			splitTwoRowsHeight: lcSplitTwoRowsHeight,
+			splitWantsTwoRows: lcSplitWantsTwoRows,
 			clickableSet: lcClickableSet,
 			findSettingsMenuItem: lcFindSettingsMenuItem,
 			settingsTriggerButton: lcSettingsTriggerButton,
@@ -92,6 +94,12 @@ ${chunks.join('\n\n')}
 			fixFloatingMenuPlacement: lcFixFloatingMenuPlacement,
 			floatingMenus: lcFloatingMenus,
 			discoverTabProxies: lcDiscoverTabProxies,
+			installMainSettings: lcInstallMainSettings,
+			refreshPluginPages: lcRefreshPluginPages,
+			startResponsivePages: lcStartResponsivePages,
+			tabIcon: lcTabIcon,
+			mainPageLayout: lcMainPageLayout,
+			nativePanelForLabel: lcNativePanelForLabel,
 			ensureTabProxies: lcEnsureTabProxies,
 			isChildTargetId: lcIsChildTargetId,
 			isMovableChildId: lcIsMovableChildId,
@@ -105,6 +113,13 @@ ${chunks.join('\n\n')}
 			subjectIsSelf: lcSubjectIsSelf,
 			subjectNames: LC_SELF_NAMES,
 			panel: LayoutCustomizerPanel,
+			installMainPanel: lcInstallMainPanel,
+			mainPanelId: LC_MAIN_PANEL_ID,
+			mainPanelLabel: LC_MAIN_PANEL_LABEL,
+			mainPanelOrder: LC_MAIN_PANEL_ORDER,
+			mainPage: LayoutCustomizerMainPage,
+			mainIcon: LayoutCustomizerMainIcon,
+			ensurePanelStyle: lcEnsurePanelStyle,
 			movableContainers: LC_MOVABLE_CONTAINERS,
 			selectors: LC_SELECTORS,
 			targets: ALL_TARGETS,

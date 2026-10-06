@@ -896,8 +896,47 @@ function buildSettingsPanel() {
   L.applyConfig({ hidden: [], order: {}, labels: {}, moved: { [tabId]: 'panelList' } })
   let selected = 0
   src.element.addEventListener('click', () => { selected += 1 })
+  const registeredMain = new Map()
+  const callbacks = new Map()
+  const injected = () => ({ saved: true })
+  const section = {
+    options: { id: 'general', label: () => '通用设置' },
+    component: (props) => ReactImpl.createElement('span', null, String(props.saved)),
+    inject: injected,
+    locale: 'test.general',
+    children: { 'settings.general.item': { kind: 'list', scope: 'root' } },
+  }
+  const item = { options: { id: 'item' }, component: () => null }
+  const sources = { 'settings.section': [section], 'settings.general.item': [item] }
+  let mainSelected = null
+  const disposeMain = L.installMainSettings({ slots: {
+    entries: (key) => sources[key] || [],
+    subscribe: (key, fn) => { callbacks.set(key, fn); return () => callbacks.delete(key) },
+    inject: (key, fn) => fn(),
+    register: (options, component) => {
+      const key = options.name + ':' + (options.key || options.id)
+      registeredMain.set(key, { options, component })
+      return () => registeredMain.delete(key)
+    },
+  } }, { selectPanel: (id) => { mainSelected = id } })
   d.panelList.querySelector('[data-lc-tab-proxy]').click()
-  check(selected === 1, '点击插件区入口没有切到对应设置 tab')
+  check(selected === 0, '主页入口仍然点击了设置导航 tab')
+  check(mainSelected === 'layout-customizer:settings:general', '主页入口没有通过 layout.selectPanel 切换面板')
+  const main = registeredMain.get('main:layout-customizer:settings:general')
+  check(main && main.options.inject === injected && main.options.locale === 'test.general', 'main 面板没有保留设置的业务注入和语言配置')
+  const childName = 'layout-customizer:settings:general:settings.general.item'
+  check(main && main.options.children[childName] && registeredMain.has(childName + ':item'), '设置子 slot 没有独立映射到主页')
+  let renderedName = null
+  const tree = main.component({ saved: true, renderSlot: (name) => { renderedName = name } })
+  tree.props.children.props.children.props.renderSlot('settings.general.item', {})
+  check(renderedName === childName, '设置内容没有通过映射后的子 slot 渲染')
+  tree.props.children.props.children.props.close()
+  check(mainSelected === null, '设置页 close 没有返回主页会话')
+  sources['settings.general.item'] = []
+  callbacks.get('settings.general.item')()
+  check(!registeredMain.has(childName + ':item'), '设置子插件卸载后主页仍然残留组件')
+  disposeMain()
+  check(registeredMain.size === 0 && callbacks.size === 0, '主页面板销毁后注册或订阅没有清理')
 
   /* 移回原位：入口要删掉，设置里的 tab 要恢复。 */
   L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
@@ -1878,6 +1917,42 @@ if (problems.length) {
   overlay.remove()
 }
 
+/* ── 测试 40（v0.1.20 回归）：插件区新增的「布局自定义」图标 ──
+   它由本插件自己注册到 `sidebar.panellist`（panelmain.src.js），
+   但显隐/排序照样由布局面板统一管：必须能被运行时发现、能被单独隐藏，
+   且隐藏它不会误伤同区其他图标、也不会把整个插件区收掉。 */
+{
+  const d = buildSidebar(false)
+  /* 宿主按 sidebar.panellist 注册渲染出来的按钮（与真机同构：button + aria-label）。 */
+  const lcIcon = document.createElement('button')
+  lcIcon.className = '_2H3hWW_panelRow'
+  lcIcon.setAttribute('aria-label', '布局自定义')
+  lcIcon.textContent = '布局自定义'
+  d.panelList.appendChild(lcIcon)
+
+  const kids = L.discoverContainerChildren()
+  const ids = (kids.panelList || []).map((k) => k.id)
+  check(
+    ids.indexOf('sidebar.icon:布局自定义') !== -1,
+    '插件区里的「布局自定义」图标没被发现（面板里就管不了它）：' + ids.join('/'),
+  )
+
+  L.applyConfig({ hidden: ['sidebar.icon:布局自定义'], order: {}, labels: {}, moved: {} })
+  check(lcIcon.getAttribute('data-lc-hidden') === '1', '「布局自定义」图标的单独隐藏没生效')
+
+  const siblings = Array.prototype.slice
+    .call(d.panelList.querySelectorAll('button'))
+    .filter((b) => b !== lcIcon)
+  check(
+    siblings.length > 0 && siblings.every((b) => b.getAttribute('data-lc-hidden') !== '1'),
+    '隐藏「布局自定义」时误伤了插件区里的其他图标',
+  )
+  check(d.panelList.getAttribute('data-lc-gone') !== '1', '插件区还有可见图标，却被整个收掉了')
+
+  L.applyConfig({ hidden: [], order: {}, labels: {}, moved: {} })
+  check(lcIcon.getAttribute('data-lc-hidden') === null, '恢复默认后「布局自定义」图标没回来')
+}
+
 console.log('全部通过 ✓')
 console.log('  · 排序只动同层节点，不给父容器加行内样式')
 console.log('  · 折叠态不隐藏会位移到标题栏的元素')
@@ -1920,3 +1995,4 @@ console.log('  · 设置导航用 <nav> 判据定位，干扰按钮与类名变�
 console.log('  · 真机场景：侧栏插件区的按钮与内容区的长列表都不会被当成设置导航')
 console.log('  · 设置导航用 <nav> 判据定位，干扰按钮与类名变化都不影响')
 console.log('  · flags（行为开关）被共享状态保留')
+console.log('  · 插件区新增的「布局自定义」图标能被布局面板发现与单独隐藏（v0.1.20）')
